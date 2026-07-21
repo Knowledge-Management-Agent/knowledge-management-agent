@@ -60,7 +60,7 @@ Generative AI, and specifically the combination of LLMs with Retrieval-Augmented
 
 ### 1.4 Vision of the Project
 
-The vision for the Knowledge Management Agent is to establish an intelligent knowledge layer that sits above the organization's existing document repositories (SharePoint, Confluence, and blob storage) and acts as both a documentation co-author and an always-available expert assistant. Rather than replacing human expertise, the system is designed to augment it: automatically drafting first versions of operational documentation, keeping the organization's collective knowledge searchable and current, and giving every employee — regardless of tenure — the ability to ask a question in plain language and receive a grounded, accurate, and traceable answer.
+The vision for the Knowledge Management Agent is to establish an intelligent knowledge layer that sits above the organization's existing document repositories (SharePoint, Confluence, and object storage) and acts as both a documentation co-author and an always-available expert assistant. Rather than replacing human expertise, the system is designed to augment it: automatically drafting first versions of operational documentation, keeping the organization's collective knowledge searchable and current, and giving every employee — regardless of tenure — the ability to ask a question in plain language and receive a grounded, accurate, and traceable answer.
 
 ### 1.5 Expected Outcome
 
@@ -111,8 +111,8 @@ The Knowledge Management Agent PoC is built around a set of concrete, demonstrab
 - Semantic search over the ingested document corpus using vector embeddings.
 - Automated document ingestion pipeline, including parsing, chunking, and embedding of source documents.
 - Integration with a document repository (SharePoint and/or Confluence) as a source of truth for existing documentation.
-- Storage of ingested and generated artifacts in a cloud blob storage layer.
-- A conversational interface for querying the knowledge base, delivered through a lightweight web UI, with a future-ready integration point for Microsoft Teams.
+- Storage of ingested and generated artifacts in an object storage layer.
+- A conversational interface for querying the knowledge base, delivered through a lightweight web application, with a future-ready integration point for additional client applications (such as enterprise messaging and collaboration platforms).
 - Basic role-based access control for the PoC environment (non-production grade).
 - Logging and monitoring of system usage, retrieval performance, and generation quality for PoC evaluation purposes.
 - Evaluation of generation and retrieval quality against a defined test document set and question set.
@@ -133,7 +133,7 @@ The Knowledge Management Agent PoC is built around a set of concrete, demonstrab
 
 Should the PoC be validated and approved for further investment, the following enhancements are recommended for subsequent phases:
 
-- Full Microsoft Teams bot integration with adaptive cards, enabling conversational access directly within existing collaboration workflows.
+- Integration with enterprise collaboration and messaging platforms, enabling conversational access directly within existing communication workflows.
 - Multi-agent orchestration, allowing specialized agents for document generation, retrieval, quality review, and workflow routing to collaborate on complex tasks.
 - Integration with ITSM platforms (such as ServiceNow) to automatically draft documentation from resolved tickets and incidents.
 - Automatic incident detection integration with monitoring and observability platforms to trigger real-time runbook suggestions.
@@ -147,24 +147,24 @@ Should the PoC be validated and approved for further investment, the following e
 
 ## 4. Technology Stack
 
-The following technology stack has been selected to balance enterprise readiness, rapid PoC development velocity, and alignment with common Microsoft and open-source ecosystems used in enterprise environments.
+The following technology stack has been selected to balance enterprise readiness, rapid PoC development velocity, and cloud portability. Each layer is defined in terms of its architectural role, with representative technology options listed rather than a fixed vendor choice, so that the solution can be deployed on AWS, Azure, Google Cloud Platform, or on-premises infrastructure without structural redesign.
 
 | Layer | Technology | Purpose |
 |---|---|---|
 | Frontend | React (or lightweight web UI framework) | Provides the conversational chat interface and document review UI for the PoC. |
 | Backend | Python | Core language for orchestration logic, RAG pipeline, and integration services. |
 | API Framework | FastAPI | Exposes RESTful endpoints for document ingestion, query handling, and document generation, with built-in async support and OpenAPI documentation. |
-| LLM | Azure OpenAI Service (GPT-family models) / OpenAI API | Performs natural language understanding, document generation (runbooks, SOPs, KB articles, RCA summaries), and grounded question answering. |
-| Embedding Model | Azure OpenAI Embeddings (text-embedding-ada-002 or successor) / OpenAI Embeddings | Converts document chunks and user queries into vector representations for semantic similarity search. |
+| LLM | LLM Provider (OpenAI, Azure OpenAI, Anthropic Claude, Google Gemini, or equivalent) | Performs natural language understanding, document generation (runbooks, SOPs, KB articles, RCA summaries), and grounded question answering. |
+| Embedding Model | Embedding Provider (OpenAI, Azure OpenAI, Cohere, or open-source embedding models) | Converts document chunks and user queries into vector representations for semantic similarity search. |
 | Retrieval Framework | LangChain | Orchestrates the RAG pipeline, including chunking strategies, prompt templating, retriever configuration, and chaining of generation steps. |
-| Vector Database | Azure AI Search (vector store) / ChromaDB | Stores and indexes document embeddings, enabling fast approximate nearest-neighbor semantic search. |
+| Vector Database | ChromaDB / FAISS / Pinecone / Weaviate | Stores and indexes document embeddings, enabling fast approximate nearest-neighbor semantic search. |
 | Document Loader | LangChain Document Loaders (PDF, DOCX, HTML, Markdown connectors) | Extracts and normalizes text content from heterogeneous source document formats prior to chunking and embedding. |
 | Document Repository | SharePoint / Confluence | Serves as the authoritative source of existing organizational documentation ingested into the pipeline. |
-| Storage | Azure Blob Storage | Persists raw ingested documents, generated artifacts, and intermediate processing outputs. |
-| Authentication | Azure Active Directory (Microsoft Entra ID) | Provides identity and access control for the PoC environment (simplified configuration, non-production scope). |
-| Monitoring | Azure Monitor / Application Insights | Captures application logs, performance telemetry, and usage metrics for evaluating PoC success criteria. |
+| Object Storage | Amazon S3 / Azure Blob Storage / Google Cloud Storage | Persists raw ingested documents, generated artifacts, and intermediate processing outputs. |
+| Authentication | JWT Authentication / Basic Role-Based Access Control (RBAC) | Provides token-based identity verification and simplified access control appropriate for the PoC environment (non-production scope). |
+| Monitoring | Prometheus / Grafana / Cloud Monitoring Platform | Captures application logs, performance telemetry, and usage metrics for evaluating PoC success criteria. |
 | Containerization | Docker | Packages the API, RAG pipeline, and supporting services into portable, reproducible container images. |
-| Deployment | Azure App Service | Hosts the containerized application in a managed, scalable Platform-as-a-Service environment suitable for a PoC. |
+| Deployment | Docker / Kubernetes / Cloud Application Hosting Platform | Hosts the containerized application in a managed, scalable environment suitable for a PoC, portable across cloud providers or on-premises infrastructure. |
 | Version Control | GitHub | Manages source code, infrastructure configuration, and collaboration for the PoC development team. |
 
 ---
@@ -178,13 +178,13 @@ The Knowledge Management Agent architecture is organized into distinct layers, e
 **Purpose:** Represents the end users of the system, including operations engineers, SMEs, support staff, and new hires.
 **Responsibilities:** Submit natural language queries, upload or provide source material for documentation generation, and review/approve AI-generated documents.
 **Inputs:** Natural language questions; raw operational notes, transcripts, or documents intended for generation.
-**Outputs:** Queries and content submissions sent to the Web UI / Teams layer.
-**Interaction:** Interfaces exclusively through the Web UI or Microsoft Teams; has no direct access to backend services.
+**Outputs:** Queries and content submissions sent to the Web UI / Client Application layer.
+**Interaction:** Interfaces exclusively through the Web UI or a REST API client; has no direct access to backend services.
 
-### 5.2 Web UI / Microsoft Teams
+### 5.2 Web UI / Client Application
 
 **Purpose:** Serves as the primary interaction surface for the system.
-**Responsibilities:** Renders the chat interface, captures user input, displays generated documents and grounded answers with source citations, and (in future scope) integrates as a Teams bot.
+**Responsibilities:** Renders the chat interface, captures user input, displays generated documents and grounded answers with source citations, and (in future scope) integrates with additional client applications such as enterprise messaging and collaboration platforms.
 **Inputs:** User queries and uploaded documents.
 **Outputs:** Formatted requests sent to the Knowledge Management API; renders API responses back to the user.
 **Interaction:** Communicates with the Knowledge Management API over authenticated HTTPS/REST calls.
@@ -193,7 +193,7 @@ The Knowledge Management Agent architecture is organized into distinct layers, e
 
 **Purpose:** Acts as the central orchestration and access-control layer for the entire system.
 **Responsibilities:** Authenticates requests, routes queries to the appropriate downstream service (generation vs. retrieval), validates inputs, and aggregates responses.
-**Inputs:** HTTP requests from the Web UI / Teams layer.
+**Inputs:** HTTP requests from the Web UI / Client Application layer.
 **Outputs:** Structured JSON responses containing generated documents, retrieved answers, or status information.
 **Interaction:** Sits between the presentation layer and the LLM Service / RAG Pipeline; also emits telemetry to the Monitoring & Logging layer.
 
@@ -233,11 +233,11 @@ The Knowledge Management Agent architecture is organized into distinct layers, e
 
 **Purpose:** Represents the logical layer that manages the lifecycle of both source and generated knowledge artifacts.
 **Responsibilities:** Tracks document versions, manages metadata, and coordinates synchronization between raw source repositories and the vectorized knowledge base.
-**Inputs:** Documents from SharePoint, Confluence, and Blob Storage; newly generated artifacts from the LLM Service.
+**Inputs:** Documents from SharePoint, Confluence, and object storage; newly generated artifacts from the LLM Service.
 **Outputs:** Normalized, chunked documents ready for embedding; published documents for storage.
 **Interaction:** Bridges the external Document Repository layer and the internal RAG Pipeline / Vector Database.
 
-### 5.9 SharePoint / Confluence / Blob Storage
+### 5.9 SharePoint / Confluence / Object Storage
 
 **Purpose:** Serves as the durable, authoritative storage layer for both existing organizational documentation and newly generated artifacts.
 **Responsibilities:** Persists documents, supports version history, and provides access controls consistent with existing organizational governance.
@@ -264,7 +264,7 @@ flowchart TB
     end
 
     subgraph L2["Presentation Layer"]
-        WEB["Web UI / Microsoft Teams"]
+        WEB["Web UI / Client Application"]
     end
 
     subgraph L3["Application Layer"]
@@ -276,16 +276,16 @@ flowchart TB
         RAG["RAG Pipeline<br/>(LangChain Orchestration)"]
         RET["Retriever"]
         EMB["Embedding Model"]
-        LLM["LLM<br/>(Azure OpenAI / OpenAI)"]
+        LLM["LLM Provider<br/>(OpenAI / Azure OpenAI / Claude / Gemini)"]
     end
 
     subgraph L5["Data Layer"]
-        VDB[("Vector Database<br/>Azure AI Search / ChromaDB")]
-        DOCREPO[("Document Repository<br/>SharePoint / Confluence / Blob Storage")]
+        VDB[("Vector Database<br/>ChromaDB / FAISS / Pinecone / Weaviate")]
+        DOCREPO[("Document Repository<br/>SharePoint / Confluence / Object Storage")]
     end
 
     subgraph L6["Observability Layer"]
-        MON["Monitoring & Logging<br/>(Azure Monitor)"]
+        MON["Monitoring & Logging<br/>(Monitoring Platform)"]
     end
 
     U --> WEB
@@ -337,11 +337,11 @@ The solution supports two primary workflows: a **document ingestion workflow**, 
 
 ### 7.2 Query and Generation Workflow
 
-1. **User asks a question.** A user submits a natural language query through the Web UI or Teams interface — for example, "What is the standard rollback procedure for a failed deployment?"
+1. **User asks a question.** A user submits a natural language query through the Web UI or a client application interface — for example, "What is the standard rollback procedure for a failed deployment?"
 2. **Semantic retrieval.** The RAG Pipeline embeds the query using the same Embedding Model and issues a similarity search against the Vector Database.
 3. **Relevant context retrieved.** The Vector Database returns the top-ranked chunks most semantically similar to the query, along with their source metadata.
 4. **LLM generates response.** The RAG Pipeline assembles a prompt combining the user's question with the retrieved context and submits it to the LLM, which synthesizes a coherent, grounded natural language answer.
-5. **Response returned.** The generated answer, along with citations to the source documents used, is returned through the API to the Web UI / Teams interface and displayed to the user.
+5. **Response returned.** The generated answer, along with citations to the source documents used, is returned through the API to the Web UI / Client Application interface and displayed to the user.
 
 An analogous flow applies to document generation requests (runbooks, SOPs, KB articles, RCA summaries): the LLM Service is invoked with a task-specific prompt template and, where relevant, retrieved context from prior similar documents, producing a structured draft for human review.
 
@@ -350,7 +350,7 @@ An analogous flow applies to document generation requests (runbooks, SOPs, KB ar
 ```mermaid
 sequenceDiagram
     actor User
-    participant WebUI as Web UI / Teams
+    participant WebUI as Web UI / Client Application
     participant API as Knowledge Management API
     participant RAG as RAG Pipeline
     participant VDB as Vector Database
@@ -377,12 +377,12 @@ The following assumptions have been made in scoping and designing this Proof of 
 
 - Source documents are available in commonly supported formats, including PDF, DOCX, HTML, and Markdown.
 - Users have existing access to a SharePoint site or Confluence space that can serve as a representative document repository for the PoC.
-- Access to Azure OpenAI Service or the OpenAI API is available and provisioned for the duration of the PoC, including sufficient rate limits and quota.
+- Access to a selected LLM provider (such as OpenAI, Azure OpenAI, Anthropic Claude, or Google Gemini) is available and provisioned for the duration of the PoC, including sufficient rate limits and quota.
 - All source documents and user queries are in English.
 - Existing organizational documentation is reasonably structured (i.e., not purely unstructured free text) and of sufficient quality to serve as a meaningful ingestion corpus.
 - A representative, non-production dataset (synthetic or sanitized) will be made available for the PoC, avoiding the need to access live production or sensitive data.
 - Stakeholders will be available to review AI-generated documentation and provide qualitative feedback during the PoC evaluation period.
-- The PoC will run in a non-production Azure subscription or equivalent cloud environment with appropriate resource provisioning.
+- The PoC will run in a non-production cloud subscription (AWS, Azure, or Google Cloud Platform) or an on-premises environment with appropriate resource provisioning.
 
 ---
 
@@ -397,7 +397,7 @@ The following constraints and limitations apply to this Proof of Concept and sho
 - Synthetic or sanitized data will be used for demonstration purposes; results observed in the PoC may not directly generalize to production data characteristics.
 - The system does not perform automatic fact-checking beyond grounding responses in retrieved source content; the accuracy of generated content remains dependent on the accuracy of the source documents themselves.
 - Performance and scalability testing is limited to PoC-scale usage and does not validate behavior under full enterprise production load.
-- Integration with Microsoft Teams is implemented as a future-ready interface concept during the PoC and is not fully productionized within this phase.
+- Integration with enterprise messaging and collaboration platforms is implemented as a future-ready interface concept during the PoC and is not fully productionized within this phase.
 
 ---
 
