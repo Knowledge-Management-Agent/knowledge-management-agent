@@ -59,22 +59,17 @@ The Knowledge Management Agent uses LLMs and Retrieval-Augmented Generation (RAG
 
 ## 4. Functional Requirements
 
-- Ingest documents in PDF, DOCX, HTML, and Markdown formats
-- Chunk and embed ingested documents into a vector store
-- Retrieve top-N relevant chunks for a given query
-- Generate runbooks, SOPs, KB articles, and RCA summaries from source input
-- Answer natural language questions with citations to source documents
-- Enforce role-based access control for query and generation actions
-- Log query, retrieval, and generation events for evaluation
+- Ingest, chunk, and embed documents (PDF, DOCX, HTML, Markdown)
+- Retrieve relevant chunks and answer queries with source citations
+- Generate runbooks, SOPs, KB articles, and RCA summaries
+- Enforce role-based access control
 
 ## 5. Non-Functional Requirements
 
-- Support English-language documents and queries only
-- Respond to queries within 8 seconds end-to-end
-- Use non-production, synthetic, or sanitized data only
-- Deploy on any cloud provider (AWS, Azure, GCP) or on-premises
-- Store no PII or regulated data during the PoC
-- Log system usage, retrieval accuracy, and generation quality
+- English-language content only
+- Query response within 8 seconds
+- Non-production/synthetic data only, no PII
+- Cloud-agnostic deployment (AWS, Azure, GCP, or on-premises)
 
 ---
 
