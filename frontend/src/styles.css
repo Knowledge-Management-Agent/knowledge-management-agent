@@ -1,0 +1,42 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+  background: #f4f5f7;
+  color: #1a1a1a;
+}
+.page { max-width: 860px; margin: 0 auto; padding: 24px; }
+.app-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+h1 { font-size: 20px; }
+.tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.tab { padding: 8px 14px; border: 1px solid #ccc; background: #fff; border-radius: 6px; cursor: pointer; }
+.tab.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+.card { background: #fff; border: 1px solid #e2e2e2; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+.login-card { max-width: 420px; margin: 40px auto; }
+label { display: block; margin-bottom: 12px; font-size: 14px; }
+input, textarea, select {
+  width: 100%; padding: 8px; margin-top: 4px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px;
+}
+button {
+  padding: 8px 16px; border-radius: 6px; border: none; background: #1a1a1a; color: #fff; cursor: pointer;
+}
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.link-button { background: none; color: #555; text-decoration: underline; padding: 0; }
+.muted { color: #777; font-size: 13px; }
+.error { color: #b3261e; font-size: 13px; }
+.chat-log { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; max-height: 420px; overflow-y: auto; }
+.chat-msg { padding: 10px 12px; border-radius: 6px; }
+.chat-msg-user { background: #eef1f7; align-self: flex-end; }
+.chat-msg-assistant { background: #f7f7f2; }
+.chat-input-row, .ingest-row, .approve-row { display: flex; gap: 8px; }
+.chat-input-row input, .approve-row input { flex: 1; }
+.citations { margin-top: 6px; font-size: 12px; }
+.citation-pill {
+  display: inline-block; background: #e8e8e8; border-radius: 10px; padding: 2px 8px; margin-right: 4px; font-size: 12px;
+}
+.timing { margin-top: 4px; }
+.generated-content { white-space: pre-wrap; background: #f7f7f2; padding: 12px; border-radius: 6px; font-size: 13px; }
+.doc-list { list-style: none; padding: 0; }
+.doc-list li { padding: 6px 0; border-bottom: 1px solid #eee; }
+.checkbox-row { display: flex; align-items: center; gap: 8px; }
+.checkbox-row input { width: auto; }

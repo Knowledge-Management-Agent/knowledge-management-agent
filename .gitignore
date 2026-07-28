@@ -1,1 +1,21 @@
 /notes
+
+# Python
+backend/.venv/
+backend/__pycache__/
+**/__pycache__/
+*.pyc
+
+# Secrets / local env
+backend/.env
+
+# Vector store data
+backend/data/
+data/chroma/
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+
+# Eval output
+eval/results/
