@@ -1,0 +1,27 @@
+# Non-secret backend config, mirrors backend/.env.example. Override
+# LLM_PROVIDER / EMBEDDING_PROVIDER and CORS_ORIGINS per environment before
+# applying -- see step.md.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: km-backend-config
+  namespace: km-agent
+data:
+  LLM_PROVIDER: "mock"
+  EMBEDDING_PROVIDER: "mock"
+  OPENAI_CHAT_MODEL: "gpt-4o-mini"
+  OPENAI_EMBEDDING_MODEL: "text-embedding-3-small"
+  AZURE_OPENAI_API_VERSION: "2024-06-01"
+  ANTHROPIC_MODEL: "claude-sonnet-4-5"
+  GEMINI_CHAT_MODEL: "gemini-2.0-flash"
+  GEMINI_EMBEDDING_MODEL: "text-embedding-004"
+  CHROMA_PERSIST_DIR: "/data/chroma"
+  CHROMA_COLLECTION: "kb_documents"
+  CHUNK_SIZE_TOKENS: "700"
+  CHUNK_OVERLAP_TOKENS: "100"
+  RETRIEVAL_TOP_K: "5"
+  JWT_ALGORITHM: "HS256"
+  JWT_EXPIRES_MINUTES: "120"
+  DEMO_VIEWER_USERNAME: "viewer"
+  DEMO_AUTHOR_USERNAME: "author"
+  CORS_ORIGINS: '["https://app.REPLACE_WITH_DOMAIN"]'

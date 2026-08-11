@@ -1,0 +1,15 @@
+# ReadWriteOnce: ChromaDB's PersistentClient is a single-writer local
+# store (see report.md DEPLOY-4) -- this PVC is only safe to mount from
+# one backend pod at a time, which is why the backend Deployment is
+# pinned to replicas: 1 with strategy: Recreate.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: chroma-data
+  namespace: km-agent
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: km-gp3
+  resources:
+    requests:
+      storage: 10Gi

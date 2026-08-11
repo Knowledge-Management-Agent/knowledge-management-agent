@@ -1,0 +1,40 @@
+# Requires the AWS Load Balancer Controller add-on installed in the
+# cluster (see step.md) -- it watches Ingress objects with
+# kubernetes.io/ingress.class: alb and provisions an ALB.
+# Host-based routing (app.* / api.*) is used instead of path-based
+# routing because the backend's routes are unprefixed (/query, /generate,
+# /ingest, /health, /auth) -- see requirements.md DEPLOY-6.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: km-agent
+  namespace: km-agent
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/certificate-arn: REPLACE_WITH_ACM_CERTIFICATE_ARN
+spec:
+  rules:
+    - host: app.REPLACE_WITH_DOMAIN
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: km-frontend
+                port:
+                  number: 80
+    - host: api.REPLACE_WITH_DOMAIN
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: km-backend
+                port:
+                  number: 8000

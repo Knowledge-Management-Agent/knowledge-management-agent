@@ -10,6 +10,7 @@ markdown==3.7
 PyJWT==2.9.0
 httpx==0.27.2
 pytest==8.3.3
+mcp==1.2.1
 
 # Optional real-provider SDKs (only required for the provider you select
 # via LLM_PROVIDER / EMBEDDING_PROVIDER in .env -- the mock provider needs

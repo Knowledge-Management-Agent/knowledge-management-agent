@@ -8,6 +8,8 @@ backend/__pycache__/
 
 # Secrets / local env
 backend/.env
+backend/app/mcp/.env
+k8s/secret.yaml
 
 # Vector store data
 backend/data/

@@ -1,0 +1,11 @@
+# Requires the Amazon EBS CSI driver EKS add-on to be installed first
+# (see step.md) -- the default EKS cluster has no dynamic gp3 provisioner
+# without it.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: km-gp3
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  type: gp3
