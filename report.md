@@ -1,8 +1,8 @@
 # Knowledge Management Agent — Requirements Validation Report
 
-**Date:** 2026-08-11
+**Date:** 2026-08-11 (MCP/EKS sections revised same day, branch `feature/mcp-server-eks-deployment`)
 **Validated against:** [`requirements.md`](./requirements.md)
-**Scope of analysis:** `backend/`, `frontend/`, `eval/` as currently committed on `main`
+**Scope of analysis:** `backend/`, `frontend/`, `eval/`, `k8s/`, `step.md` on branch `feature/mcp-server-eks-deployment` (not yet merged to `main`)
 
 ## 1. Executive Summary
 
@@ -13,10 +13,13 @@ embedding abstractions and a minimal RBAC model are in place and match the plan'
 decisions.
 
 The two additions in the updated requirements — **MCP integration (MCP-1..6)** and
-**AWS EKS deployment (DEPLOY-1..10)** — have **no implementation yet**. There is no MCP
-server code, no Dockerfile/manifest targeting Kubernetes, and no registry/secrets/
-ingress configuration anywhere in the repo. These are net-new build items, not gaps in
-existing code.
+**AWS EKS deployment (DEPLOY-1..10)** — are now built: a local stdio MCP server
+(`backend/app/mcp/`) and a full set of EKS manifests + runbook (`k8s/`, `step.md`). See
+§7–8 for per-requirement status. Caveat that applies to every "Implemented" verdict in
+those two sections: this was built and locally validated (Python compiles, YAML
+parses) in an environment with no Docker or `kubectl` available — **none of it has been
+applied against a live EKS cluster yet**. Treat §7–8 as "code/artifact complete," not
+"verified running in AWS."
 
 | Category | Requirements | Implemented | Partial | Missing | N/A |
 |---|---|---|---|---|---|
@@ -25,12 +28,13 @@ existing code.
 | Architecture (ARCH) | 8 | 7 | 1 | 0 | 0 |
 | Security (SEC) | 3 | 3 | 0 | 0 | 0 |
 | Evaluation (EVAL) | 3 | 3 | 0 | 0 | 0 |
-| **MCP** | 6 | 0 | 0 | 6 | 0 |
-| **Deployment/EKS** | 10 | 0 | 2 | 7 | 1 |
-| **Total** | **48** | **28 (58%)** | **6 (13%)** | **13 (27%)** | **1 (2%)** |
+| **MCP** | 6 | 4 | 1 | 0 | 1 |
+| **Deployment/EKS** | 10 | 6 | 3 | 0 | 1 |
+| **Total** | **48** | **38 (79%)** | **8 (17%)** | **0 (0%)** | **2 (4%)** |
 
 Bottom line: the RAG/generation core is PoC-complete and evaluable today. MCP exposure
-and EKS deployment are the two open workstreams needed to satisfy the updated scope.
+and EKS deployment now have complete, reviewed artifacts on a feature branch; the
+remaining work is executing them against real AWS/EKS infrastructure and merging.
 
 ---
 
@@ -92,71 +96,99 @@ and EKS deployment are the two open workstreams needed to satisfy the updated sc
 
 ## 7. MCP Integration — Gap Analysis
 
-**Status: 0/6 implemented — new workstream, no existing code to build on.**
+**Status: 4/6 implemented, 1 partial (deliberate scope decision), 1 N/A (stretch goal).**
 
-| REQ-ID | Status | Gap |
+Design decision confirmed with the user: the MCP server runs **locally over stdio only**
+(launched by Claude Desktop/Claude Code), not deployed to the cluster. It is a thin REST
+client — [backend/app/mcp/client.py](backend/app/mcp/client.py) — that logs into the
+same `/auth/login` endpoint the web UI uses and calls `/query`, `/generate`,
+`/generate/approve`, `/ingest`, `/ingest/documents` with the resulting bearer token. This
+means it inherits RBAC by construction rather than reimplementing it, at the cost of not
+satisfying MCP-5's "independently containerized" framing as originally written.
+
+| REQ-ID | Status | Evidence |
 |---|---|---|
-| MCP-1 MCP server exposing core tools | ❌ Missing | No MCP server package, no `mcp` SDK dependency in [backend/requirements.txt](backend/requirements.txt), no tool definitions anywhere in the repo. |
-| MCP-2 MCP calls enforce RBAC | ❌ Missing | Cannot be partially satisfied without MCP-1 first. |
-| MCP-3 Reuse existing RAG/LLM/store abstractions | ❌ Missing | N/A until MCP-1 exists — but the existing `app/rag`, `app/llm`, `app/ingestion` modules are already structured as importable services independent of the FastAPI layer ([backend/app/rag/qa.py](backend/app/rag/qa.py), [generation.py](backend/app/rag/generation.py) take injectable `retriever`/`llm` args), so this is a **low-risk integration point** — an MCP server can call `answer_question()`, `generate_document()`, `IngestionService.ingest_file()` directly. |
-| MCP-4 Externalized MCP config | ❌ Missing | Would extend the existing `Settings` pattern in [backend/app/config.py](backend/app/config.py). |
-| MCP-5 Independently containerized | ❌ Missing | No Dockerfile for an MCP server; [docker-compose.yml](docker-compose.yml) has only `backend` and `frontend` services. |
-| MCP-6 (stretch) Consume external MCP servers for ingestion | ❌ Missing | Explicitly a stretch goal; no action needed for initial PoC pass. |
+| MCP-1 MCP server exposing core tools | ✅ Implemented | [backend/app/mcp/server.py](backend/app/mcp/server.py) — `FastMCP` server exposing `query_knowledge_base`, `generate_document`, `ingest_document`, `list_documents`. |
+| MCP-2 MCP calls enforce RBAC | ✅ Implemented | [backend/app/mcp/client.py](backend/app/mcp/client.py) — every tool call carries a JWT obtained via `/auth/login`; the REST API's own `require_role()` (unchanged) does the actual enforcement, so there is no separate/weaker auth path to bypass. |
+| MCP-3 Reuse existing RAG/LLM/store abstractions | ✅ Implemented | The MCP server has zero imports from `app/rag`, `app/llm`, or `app/ingestion` except the `DOC_TYPES` constant ([backend/app/mcp/server.py](backend/app/mcp/server.py)) — it calls the deployed REST API, so there is no duplicated pipeline logic by construction. |
+| MCP-4 Externalized MCP config | ✅ Implemented | [backend/app/mcp/config.py](backend/app/mcp/config.py) reads `KM_API_BASE_URL`, `KM_MCP_USERNAME`/`KM_MCP_PASSWORD` (or `KM_MCP_TOKEN`), `KM_MCP_TIMEOUT_SECONDS` from env; template at [backend/app/mcp/.env.example](backend/app/mcp/.env.example). |
+| MCP-5 Independently containerized | ⚠️ Partial — deliberate deviation | Confirmed decision: stdio-only, run locally, not containerized or deployed to EKS. Satisfies MCP-1..4 and is simpler/lower-risk for a PoC, but does not satisfy the literal "independently containerized... deploys as part of the same container pipeline" wording. If a remote/always-on MCP endpoint is needed later, `backend/app/mcp/server.py` can switch `mcp.run()` to `mcp.run(transport="streamable-http")` and gain a Deployment+Service — no logic rewrite needed. |
+| MCP-6 (stretch) Consume external MCP servers for ingestion | 🔲 N/A | Explicitly a stretch goal; no action taken, none required for this pass. |
 
-**Recommendation:** Build the MCP server as a thin new module (e.g., `backend/app/mcp/server.py`)
-using the official `mcp` Python SDK, wrapping the same service functions the REST routers
-already call (`answer_question`, `generate_document`, `IngestionService.ingest_file`,
-`get_store().list_documents`). This avoids duplicating business logic (satisfies MCP-3
-by construction) and keeps the REST API and MCP server as two thin interface layers over
-one shared core — the existing code is already factored this way (dependency-injected
-`retriever`/`llm`/`store` params throughout), so this is additive, not a refactor.
+**Verification performed:** ran the backend locally (`backend/.venv`, mock LLM/embedding
+providers, `pytest tests/` — 4/4 pass, no regressions from the `pydantic-settings` bump
+below) and drove the MCP server as a real subprocess over stdio using the `mcp` SDK's
+`ClientSession` (full `initialize()` handshake, not just the underlying HTTP calls):
+`list_tools` returned all 4 tools; `ingest_document` → `list_documents` →
+`query_knowledge_base` → `generate_document` all completed successfully end-to-end
+against a live backend instance with a real ingested document. Separately confirmed
+RBAC (MCP-2): a `viewer`-role MCP identity could call `query_knowledge_base` (200) but
+got a `403 Forbidden` from `generate_document` — the same `require_role()` check the
+REST API always enforced, with no separate/weaker path through MCP. Not yet exercised
+through an actual MCP host (Claude Desktop/Code) in this session, only the SDK's client
+library directly.
+
+**Note:** this pass also surfaced and fixed a real dependency conflict —
+`mcp==1.2.1` requires `pydantic-settings>=2.6.1`, but `backend/requirements.txt` pinned
+`==2.5.2` (pre-existing, unrelated to this feature). Bumped to `2.6.1`;
+`pip install -r requirements.txt` now resolves cleanly and all existing tests still pass.
 
 ---
 
 ## 8. Deployment / AWS EKS — Gap Analysis
 
-**Status: ~0.5/10 implemented — Docker images exist (local-runtime target), but nothing Kubernetes/EKS-specific.**
+**Status: 6/10 implemented, 3 partial, 1 N/A — manifests and runbook exist on branch
+`feature/mcp-server-eks-deployment`; nothing has been applied to a live cluster yet
+(no AWS account/Docker/kubectl available in the environment this was built in).**
 
-| REQ-ID | Status | Gap |
+| REQ-ID | Status | Evidence |
 |---|---|---|
-| DEPLOY-1 Containers runnable independent of Compose | ⚠️ Partial | [backend/Dockerfile](backend/Dockerfile) and [frontend/Dockerfile](frontend/Dockerfile) build standalone images and don't depend on Compose networking to build — but they've only ever been exercised via `docker-compose.yml`, not deployed standalone; no MCP server image exists at all (see MCP-5). |
-| DEPLOY-2 Registry (ECR) push | ❌ Missing | No CI/CD, no ECR repo reference, no image tagging/push scripting anywhere in repo. |
-| DEPLOY-3 K8s manifests / Helm chart | ❌ Missing | No `k8s/`, `helm/`, or `manifests/` directory exists. |
-| DEPLOY-4 PVC-backed vector store persistence | ❌ Missing | [backend/Dockerfile:10-11](backend/Dockerfile) declares a `VOLUME /data/chroma` (Docker-level only); no PVC/StorageClass definition. Single-pod ChromaDB via `PersistentClient` ([backend/app/rag/store.py:10](backend/app/rag/store.py)) will not tolerate multi-replica backend pods without a shared volume — a real constraint to flag before scaling replicas > 1 on EKS. |
-| DEPLOY-5 K8s Secrets / External Secrets | ❌ Missing | Current secret handling is a git-ignored `.env` file consumed via `env_file:` in Compose ([docker-compose.yml:6-7](docker-compose.yml)) — this pattern doesn't transfer to EKS as-is and needs to become K8s Secrets or an External Secrets Operator binding to AWS Secrets Manager. |
-| DEPLOY-6 Ingress + TLS | ❌ Missing | No ingress resource, no TLS cert config. |
-| DEPLOY-7 Resource requests/limits | ❌ Missing | Cannot exist without DEPLOY-3 manifests. |
-| DEPLOY-8 Liveness/readiness probes | ⚠️ Partial | Backend already exposes [`GET /health`](backend/app/api/health.py) returning provider config + indexed chunk count — directly usable as a K8s probe target once a Deployment manifest exists. Frontend (nginx) and MCP server have no equivalent health endpoint yet. |
-| DEPLOY-9 Repeatable deployment process | ❌ Missing | No manifests/Helm chart checked in yet (depends on DEPLOY-3). |
-| DEPLOY-10 Namespace-scoped, non-HA acceptable | 🔲 N/A (policy, not code) | No action required — this REQ just bounds scope; nothing to validate in code. |
+| DEPLOY-1 Containers runnable independent of Compose | ⚠️ Partial | [backend/Dockerfile](backend/Dockerfile)/[frontend/Dockerfile](frontend/Dockerfile) unchanged; `step.md` §4 now documents building and pushing them standalone to ECR. Still not actually run standalone in this session, and MCP server is deliberately excluded from containerization (see MCP-5) — not a gap, a confirmed decision, but it means DEPLOY-1 as literally written ("all services... packaged as container images") isn't fully met by design. |
+| DEPLOY-2 Registry (ECR) push | ⚠️ Partial | [step.md](step.md) §4 fully scripts `aws ecr create-repository` + `docker build`/`push`; not executed against a real AWS account in this session. |
+| DEPLOY-3 K8s manifests / Helm chart | ✅ Implemented | [k8s/](k8s) — namespace, configmap, secret template, storageclass, PVC, backend/frontend Deployments+Services, Ingress (plain manifests, per confirmed decision — Helm deferred). |
+| DEPLOY-4 PVC-backed vector store persistence | ✅ Implemented | [k8s/03-storageclass.yaml](k8s/03-storageclass.yaml) (gp3 via `ebs.csi.aws.com`) + [k8s/04-pvc.yaml](k8s/04-pvc.yaml) (ReadWriteOnce); [k8s/10-backend-deployment.yaml](k8s/10-backend-deployment.yaml) pins `replicas: 1` + `strategy: Recreate` to respect ChromaDB's single-writer `PersistentClient` ([backend/app/rag/store.py](backend/app/rag/store.py)) — do not scale without migrating the store first. Not yet verified against a live cluster (pod restart/reschedule behavior unconfirmed). |
+| DEPLOY-5 K8s Secrets / External Secrets | ✅ Implemented | [k8s/02-secret.example.yaml](k8s/02-secret.example.yaml) is a placeholder template only (never applied as-is); `step.md` §5 creates the real Secret imperatively via `kubectl create secret generic` so real values never sit in a committed/local YAML file. Cloud secret-manager integration (External Secrets Operator) explicitly deferred per confirmed decision — plain K8s Secrets judged sufficient for this PoC's security posture (SEC-3). |
+| DEPLOY-6 Ingress + TLS | ✅ Implemented | [k8s/30-ingress.yaml](k8s/30-ingress.yaml) — AWS Load Balancer Controller ALB Ingress, ACM certificate ARN annotation, host-based routing (`app.*` / `api.*` since backend routes are unprefixed). Controller install + ACM request steps in `step.md` §3. Not yet applied/verified against a live cluster. |
+| DEPLOY-7 Resource requests/limits | ✅ Implemented | Set on both [k8s/10-backend-deployment.yaml](k8s/10-backend-deployment.yaml) and [k8s/20-frontend-deployment.yaml](k8s/20-frontend-deployment.yaml). |
+| DEPLOY-8 Liveness/readiness probes | ⚠️ Partial | Backend and frontend Deployments both wire probes (`/health`, `/`); MCP server has none since it's intentionally not deployed to the cluster (see MCP-5) — the original requirement assumed a deployed MCP server. |
+| DEPLOY-9 Repeatable deployment process | ✅ Implemented | [step.md](step.md) + [k8s/](k8s) checked into the repo (on the feature branch); covers build → push → cluster add-ons → apply → verify → update → teardown. |
+| DEPLOY-10 Namespace-scoped, non-HA acceptable | 🔲 N/A (policy, not code) | Manifests use a single `km-agent` namespace, 1 backend replica, 2 frontend replicas — consistent with this bound; no multi-AZ/DR work attempted. |
 
-**Recommendation:** Sequence as (a) add a Dockerfile for the MCP server, (b) author a
-Helm chart or plain manifests for backend/frontend/MCP-server Deployments + Services +
-Ingress, reusing `/health` for probes, (c) decide PVC vs. managed vector DB **before**
-setting backend `replicas > 1`, since the current ChromaDB `PersistentClient` is a
-single-writer local store — this is the one architectural decision that isn't just
-"add a manifest," it affects `app/rag/store.py`.
+**Remaining work, in order:** (1) actually run `step.md` against a real AWS account —
+create/confirm the EKS cluster, install the EBS CSI driver and AWS Load Balancer
+Controller add-ons, apply the manifests, and confirm the PVC survives a pod restart; (2)
+merge `feature/mcp-server-eks-deployment` once verified; (3) if a remote/always-on MCP
+endpoint becomes a real requirement, add HTTP transport + a Deployment for it (see MCP-5
+note in §7) rather than reworking the REST client.
 
 ---
 
 ## 9. Prioritized Next Steps
 
-1. **Decide Chroma's EKS story first** (DEPLOY-4) — single-replica PVC-backed pod is
-   the low-effort path consistent with the PoC's existing single-process `ChromaStore`;
-   only revisit if concurrent-write/multi-replica needs emerge.
-2. **Build the MCP server** (MCP-1..5) as a thin wrapper over existing `app/rag` /
-   `app/ingestion` services — no core logic changes needed.
-3. **Author K8s manifests/Helm chart** (DEPLOY-2, 3, 6, 7, 9) for backend, frontend, and
-   the new MCP server; wire `/health` into readiness/liveness probes (DEPLOY-8).
-4. **Move secrets out of `.env`** into K8s Secrets or AWS Secrets Manager (DEPLOY-5)
-   before first cluster deployment — current `.env` pattern is dev-only by design
-   (already git-ignored, per [.gitignore](.gitignore)) and shouldn't be copied into
-   cluster config as plain env values without at least K8s Secret indirection.
+1. **Execute `step.md` against a real AWS account**: create/confirm the EKS cluster,
+   install the EBS CSI driver + AWS Load Balancer Controller add-ons, request/validate
+   an ACM cert, build+push images to ECR, apply `k8s/`, and confirm `/health` responds
+   through the Ingress. Nothing in DEPLOY-2..9 has been verified live yet.
+2. **Resolve `git push` access to `Knowledge-Management-Agent/knowledge-management-agent`**
+   — the account used in this session got a 403; the MCP server and EKS work are
+   committed locally on `feature/mcp-server-eks-deployment` but not pushed. Either grant
+   that account write access or push from a fork.
+3. **Confirm the PVC survives a pod restart/reschedule** on a live cluster (DEPLOY-4) —
+   the manifest is structurally correct (`ReadWriteOnce`, `strategy: Recreate`,
+   `replicas: 1`) but this is exactly the kind of thing that's only really proven at
+   runtime.
+4. **Exercise the MCP server through an actual MCP client** (Claude Desktop or
+   `claude mcp add`, per `step.md` §8) rather than just the underlying REST client —
+   confirms the stdio protocol handshake and tool schema, not just the HTTP calls
+   underneath it.
 5. **Run and record one full `eval/run_eval.py` pass against a real (non-mock) LLM
    provider** and commit the output — NFR-1/2/3 are implemented but their PASS/FAIL
    status against real targets isn't yet captured anywhere in the repo.
 6. Optionally grow `eval/` corpus from 10 → 15-30 documents to fully match Plan §3E's
    target range (minor, non-blocking).
+7. If a remote/always-on MCP endpoint is later required (vs. today's local-stdio-only
+   decision), add HTTP transport to `backend/app/mcp/server.py` and a corresponding
+   Deployment — see the MCP-5 note in §7.
 
 ---
 
