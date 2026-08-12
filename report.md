@@ -29,8 +29,8 @@ applied against a live EKS cluster yet**. Treat §7–8 as "code/artifact comple
 | Security (SEC) | 3 | 3 | 0 | 0 | 0 |
 | Evaluation (EVAL) | 3 | 3 | 0 | 0 | 0 |
 | **MCP** | 6 | 4 | 1 | 0 | 1 |
-| **Deployment/EKS** | 10 | 6 | 3 | 0 | 1 |
-| **Total** | **48** | **38 (79%)** | **8 (17%)** | **0 (0%)** | **2 (4%)** |
+| **Deployment/EKS** | 10 | 5 | 4 | 0 | 1 |
+| **Total** | **48** | **37 (77%)** | **9 (19%)** | **0 (0%)** | **2 (4%)** |
 
 Bottom line: the RAG/generation core is PoC-complete and evaluable today. MCP exposure
 and EKS deployment now have complete, reviewed artifacts on a feature branch; the
@@ -137,29 +137,32 @@ library directly.
 
 ## 8. Deployment / AWS EKS — Gap Analysis
 
-**Status: 6/10 implemented, 3 partial, 1 N/A — manifests and runbook exist on branch
-`feature/mcp-server-eks-deployment`; nothing has been applied to a live cluster yet
-(no AWS account/Docker/kubectl available in the environment this was built in).**
+**Status: 5/10 implemented, 4 partial, 1 N/A — manifests, Terraform, and runbook exist on
+branch `feature/mcp-server-eks-deployment`; nothing has been applied to a live cluster
+yet (no AWS account/Docker/kubectl/network-unrestricted `terraform init` available in
+the environment this was built in — see the `terraform/` note in §11 of `step.md`).**
 
 | REQ-ID | Status | Evidence |
 |---|---|---|
-| DEPLOY-1 Containers runnable independent of Compose | ⚠️ Partial | [backend/Dockerfile](backend/Dockerfile)/[frontend/Dockerfile](frontend/Dockerfile) unchanged; `step.md` §4 now documents building and pushing them standalone to ECR. Still not actually run standalone in this session, and MCP server is deliberately excluded from containerization (see MCP-5) — not a gap, a confirmed decision, but it means DEPLOY-1 as literally written ("all services... packaged as container images") isn't fully met by design. |
-| DEPLOY-2 Registry (ECR) push | ⚠️ Partial | [step.md](step.md) §4 fully scripts `aws ecr create-repository` + `docker build`/`push`; not executed against a real AWS account in this session. |
-| DEPLOY-3 K8s manifests / Helm chart | ✅ Implemented | [k8s/](k8s) — namespace, configmap, secret template, storageclass, PVC, backend/frontend Deployments+Services, Ingress (plain manifests, per confirmed decision — Helm deferred). |
-| DEPLOY-4 PVC-backed vector store persistence | ✅ Implemented | [k8s/03-storageclass.yaml](k8s/03-storageclass.yaml) (gp3 via `ebs.csi.aws.com`) + [k8s/04-pvc.yaml](k8s/04-pvc.yaml) (ReadWriteOnce); [k8s/10-backend-deployment.yaml](k8s/10-backend-deployment.yaml) pins `replicas: 1` + `strategy: Recreate` to respect ChromaDB's single-writer `PersistentClient` ([backend/app/rag/store.py](backend/app/rag/store.py)) — do not scale without migrating the store first. Not yet verified against a live cluster (pod restart/reschedule behavior unconfirmed). |
+| DEPLOY-1 Containers runnable independent of Compose | ⚠️ Partial | [backend/Dockerfile](backend/Dockerfile)/[frontend/Dockerfile](frontend/Dockerfile) unchanged; `step.md` §4 now documents building and pushing them standalone to ECR repos provisioned by [terraform/ecr.tf](terraform/ecr.tf). Still not actually run standalone in this session, and MCP server is deliberately excluded from containerization (see MCP-5) — not a gap, a confirmed decision, but it means DEPLOY-1 as literally written ("all services... packaged as container images") isn't fully met by design. |
+| DEPLOY-2 Registry (ECR) push | ⚠️ Partial | ECR repos are now declared as code in [terraform/ecr.tf](terraform/ecr.tf) (with a 14-day untagged-image lifecycle policy) rather than created ad hoc via CLI; `step.md` §4 scripts the `docker build`/`push`. Not executed against a real AWS account in this session. |
+| DEPLOY-3 K8s manifests / Helm chart | ✅ Implemented | [k8s/](k8s) — namespace, configmap, secret template, storageclass, PVC, backend/frontend Deployments+Services, Ingress (plain manifests, per confirmed decision — Helm deferred). Cluster/VPC/IAM/ECR side is now also code, in [terraform/](terraform) (`terraform-aws-modules/vpc` + `eks` + `iam`), rather than the `eksctl` imperative commands `step.md` originally documented. |
+| DEPLOY-4 PVC-backed vector store persistence | ✅ Implemented | [k8s/03-storageclass.yaml](k8s/03-storageclass.yaml) (gp3 via `ebs.csi.aws.com`) + [k8s/04-pvc.yaml](k8s/04-pvc.yaml) (ReadWriteOnce); the EBS CSI driver add-on itself (a prerequisite for that StorageClass to provision anything) is now provisioned declaratively via [terraform/addons.tf](terraform/addons.tf) (IRSA role + `aws_eks_addon`). [k8s/10-backend-deployment.yaml](k8s/10-backend-deployment.yaml) pins `replicas: 1` + `strategy: Recreate` to respect ChromaDB's single-writer `PersistentClient` ([backend/app/rag/store.py](backend/app/rag/store.py)) — do not scale without migrating the store first. Not yet verified against a live cluster (pod restart/reschedule behavior unconfirmed). |
 | DEPLOY-5 K8s Secrets / External Secrets | ✅ Implemented | [k8s/02-secret.example.yaml](k8s/02-secret.example.yaml) is a placeholder template only (never applied as-is); `step.md` §5 creates the real Secret imperatively via `kubectl create secret generic` so real values never sit in a committed/local YAML file. Cloud secret-manager integration (External Secrets Operator) explicitly deferred per confirmed decision — plain K8s Secrets judged sufficient for this PoC's security posture (SEC-3). |
-| DEPLOY-6 Ingress + TLS | ✅ Implemented | [k8s/30-ingress.yaml](k8s/30-ingress.yaml) — AWS Load Balancer Controller ALB Ingress, ACM certificate ARN annotation, host-based routing (`app.*` / `api.*` since backend routes are unprefixed). Controller install + ACM request steps in `step.md` §3. Not yet applied/verified against a live cluster. |
+| DEPLOY-6 Ingress + TLS | ⚠️ Partial | [k8s/30-ingress.yaml](k8s/30-ingress.yaml) — AWS Load Balancer Controller ALB Ingress, ACM certificate ARN annotation, host-based routing (`app.*` / `api.*` since backend routes are unprefixed); the controller itself is now installed via Terraform ([terraform/addons.tf](terraform/addons.tf), IRSA + `helm_release`). Per a follow-up confirmed decision, domain/ACM/TLS is explicitly deferred for the first deployment pass — `step.md` §6/§7 default to `kubectl port-forward` instead, with the Ingress path documented as a "once you have a domain" addendum. TLS termination (the literal DEPLOY-6 requirement) isn't exercised until that's revisited. |
 | DEPLOY-7 Resource requests/limits | ✅ Implemented | Set on both [k8s/10-backend-deployment.yaml](k8s/10-backend-deployment.yaml) and [k8s/20-frontend-deployment.yaml](k8s/20-frontend-deployment.yaml). |
 | DEPLOY-8 Liveness/readiness probes | ⚠️ Partial | Backend and frontend Deployments both wire probes (`/health`, `/`); MCP server has none since it's intentionally not deployed to the cluster (see MCP-5) — the original requirement assumed a deployed MCP server. |
 | DEPLOY-9 Repeatable deployment process | ✅ Implemented | [step.md](step.md) + [k8s/](k8s) checked into the repo (on the feature branch); covers build → push → cluster add-ons → apply → verify → update → teardown. |
 | DEPLOY-10 Namespace-scoped, non-HA acceptable | 🔲 N/A (policy, not code) | Manifests use a single `km-agent` namespace, 1 backend replica, 2 frontend replicas — consistent with this bound; no multi-AZ/DR work attempted. |
 
-**Remaining work, in order:** (1) actually run `step.md` against a real AWS account —
-create/confirm the EKS cluster, install the EBS CSI driver and AWS Load Balancer
-Controller add-ons, apply the manifests, and confirm the PVC survives a pod restart; (2)
-merge `feature/mcp-server-eks-deployment` once verified; (3) if a remote/always-on MCP
-endpoint becomes a real requirement, add HTTP transport + a Deployment for it (see MCP-5
-note in §7) rather than reworking the REST client.
+**Remaining work, in order:** (1) run `terraform apply` (`step.md` §2) against the real
+AWS account now configured — this is also the first real test of the Terraform config
+itself, since `init`/`plan` couldn't be run in the authoring environment; (2) apply the
+`k8s/` manifests and confirm the PVC survives a pod restart; (3) merge
+`feature/mcp-server-eks-deployment` once verified; (4) revisit domain/ACM/TLS (deferred
+per confirmed decision — currently `kubectl port-forward` stands in for it); (5) if a
+remote/always-on MCP endpoint becomes a real requirement, add HTTP transport + a
+Deployment for it (see MCP-5 note in §7) rather than reworking the REST client.
 
 ---
 

@@ -1,0 +1,7 @@
+# Copy to backend.hcl (gitignored) and fill in with terraform/bootstrap's
+# outputs: `terraform -chdir=bootstrap output`
+bucket         = "km-agent-tfstate-REPLACE_WITH_ACCOUNT_ID"
+key            = "km-agent/terraform.tfstate"
+region         = "us-east-1"
+dynamodb_table = "km-agent-terraform-locks"
+encrypt        = true

@@ -1,6 +1,6 @@
 # Deployment Guide — AWS EKS + MCP Server
 
-**Target:** AWS EKS (per `requirements.md` §7, DEPLOY-1..10) | **Manifest style:** plain Kubernetes YAML (`k8s/`) — a Helm chart can replace these later without changing what's deployed | **MCP transport:** local stdio only — the MCP server is not containerized/deployed to the cluster; it runs on your machine and calls the deployed REST API over HTTPS.
+**Target:** AWS EKS (per `requirements.md` §7, DEPLOY-1..10) | **Infra provisioning:** Terraform (`terraform/`) — VPC, EKS cluster/node group, IRSA roles, EBS CSI driver, AWS Load Balancer Controller, ECR | **App manifests:** plain Kubernetes YAML (`k8s/`) — a Helm chart can replace these later without changing what's deployed | **MCP transport:** local stdio only — the MCP server is not containerized/deployed to the cluster; it runs on your machine and calls the deployed REST API over HTTPS.
 
 This closes the two gaps identified in `report.md` §7–8 (MCP-1..6, DEPLOY-1..10). It does not change anything about the existing RAG pipeline, RBAC, or generation logic — only how the app is packaged, exposed, and additionally reachable via MCP.
 
@@ -21,16 +21,14 @@ The MCP server is a thin REST client (`backend/app/mcp/client.py`) — it logs i
 ## 1. Prerequisites
 
 Install locally:
-- `aws` CLI v2, authenticated (`aws sts get-caller-identity` should work)
+- `aws` CLI v2, authenticated (`aws sts get-caller-identity` should work — you're using an IAM user with AdministratorAccess, which is sufficient for everything below)
+- `terraform` >= 1.5 (provisions the VPC/EKS/IAM/ECR/add-ons — replaces the old `eksctl`/manual-`helm` approach)
 - `kubectl`
-- `eksctl`
 - `docker`
-- `helm` (only needed to install the AWS Load Balancer Controller add-on, not for the app itself)
 
 You need:
-- An existing EKS cluster, **or** create one (§2)
-- An AWS account with permission to create ECR repos, IAM roles, and EKS add-ons
-- A domain you control (for Ingress + TLS) — or skip TLS and test via the ALB's own hostname (§6 has both paths)
+- An AWS account with permission to create VPCs, EKS clusters, IAM roles, ECR repos, and EKS add-ons (AdministratorAccess covers this)
+- Nothing else yet — no domain required. This guide skips Route53/ACM/TLS for now and tests via `kubectl port-forward` (§6/§7). Add a domain + ACM cert later by extending `terraform/` with an `aws_acm_certificate` and Route53 records, then filling in `k8s/30-ingress.yaml`'s placeholders — nothing else in this guide needs to change.
 
 Set these once, reuse everywhere below:
 
@@ -38,121 +36,95 @@ Set these once, reuse everywhere below:
 export AWS_REGION=us-east-1
 export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 export CLUSTER_NAME=km-agent-poc
-export ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 export IMAGE_TAG=$(git rev-parse --short HEAD)
 ```
 
 ---
 
-## 2. Create the EKS cluster (skip if you already have one)
+## 2. Provision AWS infrastructure with Terraform
+
+Two Terraform roots: `terraform/bootstrap` (state backend, applied once ever, local state) and `terraform/` (VPC, EKS, node group, IAM/IRSA, EBS CSI driver, AWS Load Balancer Controller, ECR — applied per environment, remote state in S3).
+
+### 2a. Bootstrap the state backend (one-time, ever)
 
 ```bash
-eksctl create cluster \
-  --name "$CLUSTER_NAME" \
-  --region "$AWS_REGION" \
-  --nodegroup-name km-agent-workers \
-  --node-type t3.medium \
-  --nodes 2 \
-  --nodes-min 2 \
-  --nodes-max 3 \
-  --managed
+cd terraform/bootstrap
+terraform init
+terraform apply
 ```
 
-This provisions VPC, subnets, and a managed node group. Takes ~15-20 minutes. `eksctl` also writes your `kubectl` context automatically; verify with:
+Note the outputs (`state_bucket_name`, `lock_table_name`) — you need them next.
+
+### 2b. Configure and apply the main infrastructure
 
 ```bash
-kubectl get nodes
+cd ../   # back to terraform/
+cp backend.hcl.example backend.hcl
 ```
+
+Edit `backend.hcl`: set `bucket` and `dynamodb_table` to the bootstrap outputs, `region` to `$AWS_REGION`. (`backend.hcl` is gitignored — it's environment-specific, not secret, but there's no reason to commit it.)
+
+```bash
+terraform init -backend-config=backend.hcl
+terraform plan    # review: 1 VPC, 1 EKS cluster + node group, 2 IRSA roles, 1 EKS add-on,
+                  # 1 helm_release, 2 ECR repos -- roughly 40-50 resources
+terraform apply
+```
+
+This takes **15-20 minutes** (EKS cluster creation dominates). When it finishes:
+
+```bash
+terraform output                       # note ecr_repository_urls
+eval $(terraform output -raw configure_kubectl)   # runs `aws eks update-kubeconfig ...`
+kubectl get nodes                      # should show 2 Ready nodes
+kubectl get deployment -n kube-system aws-load-balancer-controller   # should show 1/1 Ready
+```
+
+```bash
+export ECR_BACKEND_URL=$(terraform output -json ecr_repository_urls | python -c "import sys,json;print(json.load(sys.stdin)['km-agent-backend'])")
+export ECR_FRONTEND_URL=$(terraform output -json ecr_repository_urls | python -c "import sys,json;print(json.load(sys.stdin)['km-agent-frontend'])")
+```
+
+**What Terraform owns vs. what `kubectl` owns:** Terraform provisions cloud infrastructure and cluster add-ons only (VPC, EKS, node group, IRSA roles, the EBS CSI driver add-on, the AWS Load Balancer Controller). It does **not** create the app's namespace, ConfigMap, Secret, PVC, Deployments, Services, or Ingress — those stay as plain `kubectl apply -f k8s/...` (§5–6), unchanged from before. This keeps a clean line: Terraform = cluster exists and is ready; `kubectl`/`k8s/` = what runs on it.
 
 ---
 
-## 3. Cluster add-ons (one-time per cluster)
+## 3. (No separate add-on step — Terraform did this in §2)
 
-### 3a. Amazon EBS CSI driver (required for the Chroma PVC, DEPLOY-4)
-
-```bash
-eksctl create iamserviceaccount \
-  --cluster "$CLUSTER_NAME" --region "$AWS_REGION" \
-  --namespace kube-system --name ebs-csi-controller-sa \
-  --role-name AmazonEKS_EBS_CSI_DriverRole \
-  --attach-policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy \
-  --approve --role-only
-
-eksctl create addon \
-  --cluster "$CLUSTER_NAME" --region "$AWS_REGION" \
-  --name aws-ebs-csi-driver \
-  --service-account-role-arn "arn:aws:iam::${AWS_ACCOUNT_ID}:role/AmazonEKS_EBS_CSI_DriverRole" \
-  --force
-```
-
-### 3b. AWS Load Balancer Controller (required for the Ingress → ALB, DEPLOY-6)
+The EBS CSI driver add-on and AWS Load Balancer Controller are provisioned by `terraform/addons.tf` as part of `terraform apply` above. If either failed or you need to re-check them later:
 
 ```bash
-eksctl utils associate-iam-oidc-provider --cluster "$CLUSTER_NAME" --region "$AWS_REGION" --approve
-
-curl -sO https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/main/docs/install/iam_policy.json
-aws iam create-policy \
-  --policy-name AWSLoadBalancerControllerIAMPolicy \
-  --policy-document file://iam_policy.json
-
-eksctl create iamserviceaccount \
-  --cluster "$CLUSTER_NAME" --region "$AWS_REGION" \
-  --namespace kube-system --name aws-load-balancer-controller \
-  --attach-policy-arn "arn:aws:iam::${AWS_ACCOUNT_ID}:policy/AWSLoadBalancerControllerIAMPolicy" \
-  --approve
-
-helm repo add eks https://aws.github.io/eks-charts
-helm repo update
-helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
-  -n kube-system \
-  --set clusterName="$CLUSTER_NAME" \
-  --set serviceAccount.create=false \
-  --set serviceAccount.name=aws-load-balancer-controller
+kubectl get pods -n kube-system | grep -E "ebs-csi|aws-load-balancer"
 ```
-
-Verify: `kubectl get deployment -n kube-system aws-load-balancer-controller`.
-
-### 3c. ACM certificate (only if you're doing TLS with a real domain — see §6 for the no-domain alternative)
-
-```bash
-aws acm request-certificate \
-  --domain-name "*.REPLACE_WITH_DOMAIN" \
-  --validation-method DNS \
-  --region "$AWS_REGION"
-```
-
-Complete DNS validation in Route53 (or your DNS provider), then note the certificate ARN for `k8s/30-ingress.yaml`.
 
 ---
 
 ## 4. Build and push images to ECR
 
 ```bash
-aws ecr create-repository --repository-name km-agent-backend --region "$AWS_REGION" || true
-aws ecr create-repository --repository-name km-agent-frontend --region "$AWS_REGION" || true
-
 aws ecr get-login-password --region "$AWS_REGION" | \
-  docker login --username AWS --password-stdin "$ECR_REGISTRY"
+  docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
-docker build -t "$ECR_REGISTRY/km-agent-backend:$IMAGE_TAG" ./backend
-docker push "$ECR_REGISTRY/km-agent-backend:$IMAGE_TAG"
+docker build -t "${ECR_BACKEND_URL}:$IMAGE_TAG" ./backend
+docker push "${ECR_BACKEND_URL}:$IMAGE_TAG"
 
-docker build -t "$ECR_REGISTRY/km-agent-frontend:$IMAGE_TAG" \
-  --build-arg VITE_API_BASE_URL="https://api.REPLACE_WITH_DOMAIN" \
+docker build -t "${ECR_FRONTEND_URL}:$IMAGE_TAG" \
+  --build-arg VITE_API_BASE_URL="http://localhost:8000" \
   ./frontend
-docker push "$ECR_REGISTRY/km-agent-frontend:$IMAGE_TAG"
+docker push "${ECR_FRONTEND_URL}:$IMAGE_TAG"
 ```
 
-`VITE_API_BASE_URL` is baked into the frontend at build time (see `frontend/Dockerfile`) — it must match whatever hostname you'll expose the backend on in §6. If you don't have a domain yet, rebuild the frontend image once you know the ALB hostname (or your real domain) rather than guessing now.
+`VITE_API_BASE_URL` is baked into the frontend at build time (see `frontend/Dockerfile`). It's set to `http://localhost:8000` here because §6/§7 test via `kubectl port-forward` (no domain yet, per §1). Once you add a real domain + Ingress, rebuild the frontend image with `VITE_API_BASE_URL=https://api.<your-domain>` instead.
 
 ---
 
 ## 5. Apply base manifests (namespace, config, storage)
 
 Edit placeholders first:
-- `k8s/01-configmap.yaml` — set `LLM_PROVIDER` / `EMBEDDING_PROVIDER` to a real provider (not `mock`) if you want real answers, and set `CORS_ORIGINS` to your actual frontend origin.
-- `k8s/10-backend-deployment.yaml` and `k8s/20-frontend-deployment.yaml` — replace `REPLACE_WITH_ECR_URI` / `REPLACE_WITH_TAG` with `$ECR_REGISTRY` / `$IMAGE_TAG` from above.
-- `k8s/30-ingress.yaml` — replace `REPLACE_WITH_DOMAIN` and `REPLACE_WITH_ACM_CERTIFICATE_ARN` (or see §6 for the no-domain path).
+- `k8s/01-configmap.yaml` — set `LLM_PROVIDER` / `EMBEDDING_PROVIDER` to a real provider (not `mock`) if you want real answers. `CORS_ORIGINS` can stay as-is while testing via `kubectl port-forward` (browser origin is `http://localhost:5173`/`:8080` either way).
+- `k8s/10-backend-deployment.yaml` — replace `REPLACE_WITH_ECR_URI/km-agent-backend:REPLACE_WITH_TAG` with `${ECR_BACKEND_URL}:${IMAGE_TAG}`.
+- `k8s/20-frontend-deployment.yaml` — replace `REPLACE_WITH_ECR_URI/km-agent-frontend:REPLACE_WITH_TAG` with `${ECR_FRONTEND_URL}:${IMAGE_TAG}`.
+- `k8s/30-ingress.yaml` — leave as-is for now (not applied until §1's "add a domain later" step).
 
 ```bash
 kubectl apply -f k8s/00-namespace.yaml
@@ -190,16 +162,7 @@ kubectl apply -f k8s/20-frontend-deployment.yaml
 kubectl apply -f k8s/21-frontend-service.yaml
 ```
 
-**If you have a domain + ACM cert (recommended, matches DEPLOY-6's TLS requirement):**
-
-```bash
-kubectl apply -f k8s/30-ingress.yaml
-kubectl get ingress -n km-agent   # wait for ADDRESS to populate (a few minutes)
-```
-
-Point `app.<domain>` and `api.<domain>` (Route53 CNAME/ALIAS) at the ALB hostname shown in `ADDRESS`.
-
-**If you don't have a domain yet (quick PoC test, no TLS):** skip the Ingress and reach the services directly:
+**No domain yet (this guide's default path)** — skip the Ingress and reach the services directly:
 
 ```bash
 kubectl port-forward -n km-agent svc/km-backend 8000:8000 &
@@ -207,6 +170,15 @@ kubectl port-forward -n km-agent svc/km-frontend 8080:80 &
 ```
 
 Then open `http://localhost:8080` and `curl http://localhost:8000/health`.
+
+**Once you have a domain + ACM cert** (see §1): fill in `k8s/30-ingress.yaml`'s placeholders, rebuild the frontend image with the real `VITE_API_BASE_URL` (§4), then:
+
+```bash
+kubectl apply -f k8s/30-ingress.yaml
+kubectl get ingress -n km-agent   # wait for ADDRESS to populate (a few minutes)
+```
+
+Point `app.<domain>` and `api.<domain>` (Route53 CNAME/ALIAS) at the ALB hostname shown in `ADDRESS`.
 
 ---
 
@@ -217,19 +189,21 @@ kubectl get pods -n km-agent -w        # wait for Running/Ready
 kubectl rollout status deployment/km-backend -n km-agent
 kubectl rollout status deployment/km-frontend -n km-agent
 
-curl -s https://api.REPLACE_WITH_DOMAIN/health | python -m json.tool
+curl -s http://localhost:8000/health | python -m json.tool
 # expect: {"status": "ok", "llm_provider": "...", "embedding_provider": "...", "indexed_chunks": 0}
 ```
+
+(Substitute `https://api.<your-domain>` for `http://localhost:8000` throughout this section once you've applied the Ingress from §6.)
 
 Log in and run one query end-to-end:
 
 ```bash
-TOKEN=$(curl -s -X POST https://api.REPLACE_WITH_DOMAIN/auth/login \
+TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"author","password":"<DEMO_AUTHOR_PASSWORD from step 5>"}' \
   | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
 
-curl -s -X POST https://api.REPLACE_WITH_DOMAIN/query \
+curl -s -X POST http://localhost:8000/query \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"question":"test question"}'
 ```
@@ -242,7 +216,7 @@ If it returns an answer (mock text if `LLM_PROVIDER=mock`), the pipeline is live
 
 ## 8. Run the MCP server locally
 
-The MCP server is not deployed — you run it on your own machine, and it talks to the cluster over the same HTTPS endpoint you just verified.
+The MCP server is not deployed — you run it on your own machine, and it talks to the cluster over the same endpoint you just verified in §7 (`localhost:8000` via port-forward, or `https://api.<your-domain>` once you have an Ingress).
 
 ```bash
 cd backend
@@ -253,10 +227,12 @@ pip install -r requirements.txt
 Create `backend/app/mcp/.env` (copy from `backend/app/mcp/.env.example`, already gitignored) and set:
 
 ```
-KM_API_BASE_URL=https://api.REPLACE_WITH_DOMAIN
+KM_API_BASE_URL=http://localhost:8000
 KM_MCP_USERNAME=author
 KM_MCP_PASSWORD=<DEMO_AUTHOR_PASSWORD from step 5>
 ```
+
+(Use `https://api.<your-domain>` instead once you've set up the Ingress. Either way, the `kubectl port-forward` from §6 needs to be running for `localhost:8000` to work.)
 
 Load it into the shell and run the server directly to confirm it starts (it will block, waiting on stdio — Ctrl+C to stop):
 
@@ -269,7 +245,7 @@ python -m app.mcp.server
 
 ```bash
 claude mcp add km-agent \
-  --env KM_API_BASE_URL=https://api.REPLACE_WITH_DOMAIN \
+  --env KM_API_BASE_URL=http://localhost:8000 \
   --env KM_MCP_USERNAME=author \
   --env KM_MCP_PASSWORD=<DEMO_AUTHOR_PASSWORD> \
   -- python -m app.mcp.server
@@ -289,7 +265,7 @@ Add to `claude_desktop_config.json`:
       "args": ["-m", "app.mcp.server"],
       "cwd": "/absolute/path/to/knowledge-management-agent/backend",
       "env": {
-        "KM_API_BASE_URL": "https://api.REPLACE_WITH_DOMAIN",
+        "KM_API_BASE_URL": "http://localhost:8000",
         "KM_MCP_USERNAME": "author",
         "KM_MCP_PASSWORD": "<DEMO_AUTHOR_PASSWORD>"
       }
@@ -306,9 +282,9 @@ Tools exposed: `query_knowledge_base`, `generate_document`, `ingest_document` (r
 
 ```bash
 export IMAGE_TAG=$(git rev-parse --short HEAD)
-docker build -t "$ECR_REGISTRY/km-agent-backend:$IMAGE_TAG" ./backend
-docker push "$ECR_REGISTRY/km-agent-backend:$IMAGE_TAG"
-kubectl set image deployment/km-backend backend="$ECR_REGISTRY/km-agent-backend:$IMAGE_TAG" -n km-agent
+docker build -t "${ECR_BACKEND_URL}:$IMAGE_TAG" ./backend
+docker push "${ECR_BACKEND_URL}:$IMAGE_TAG"
+kubectl set image deployment/km-backend backend="${ECR_BACKEND_URL}:$IMAGE_TAG" -n km-agent
 kubectl rollout status deployment/km-backend -n km-agent
 ```
 
@@ -325,10 +301,16 @@ kubectl delete -f k8s/10-backend-deployment.yaml -f k8s/11-backend-service.yaml
 kubectl delete -f k8s/04-pvc.yaml -f k8s/03-storageclass.yaml   # deletes the PVC -- Chroma data is lost
 kubectl delete secret km-backend-secret -n km-agent
 kubectl delete -f k8s/01-configmap.yaml -f k8s/00-namespace.yaml
-
-# only if you created the cluster in step 2 and nothing else uses it:
-eksctl delete cluster --name "$CLUSTER_NAME" --region "$AWS_REGION"
 ```
+
+Then tear down the AWS infrastructure (only if nothing else uses this cluster):
+
+```bash
+cd terraform
+terraform destroy   # removes VPC, EKS cluster/node group, IRSA roles, add-ons, ECR repos
+```
+
+The state backend (`terraform/bootstrap` — S3 bucket + DynamoDB table) is meant to be long-lived; leave it unless you're permanently done with this project. If you do want to remove it: `cd terraform/bootstrap && terraform destroy` — note the S3 bucket has `prevent_destroy` set, so you'd need to remove that lifecycle block first (deliberate friction against accidentally deleting Terraform state).
 
 ---
 
@@ -338,3 +320,4 @@ eksctl delete cluster --name "$CLUSTER_NAME" --region "$AWS_REGION"
 - **MCP server isn't deployed or containerized** by design (confirmed choice: stdio-only, local). This satisfies MCP-1..4 but not the "independently containerized" framing in MCP-5/DEPLOY-1 as originally written in `requirements.md` — worth a note back to whoever owns that doc if a remote/always-on MCP endpoint is needed later (that would mean adding HTTP transport + a Deployment, which the code is structured to support without a rewrite: `mcp.run(transport="streamable-http")` instead of the default stdio call in `backend/app/mcp/server.py`).
 - **Eval hasn't been run against a real LLM provider and recorded** (NFR-1/2/3 in `report.md` §3) — do this before treating the `≥85%`/`≥90%`/`≤8s` targets as met, independent of this deployment work.
 - **Secrets are plain K8s Secrets**, not AWS Secrets Manager / External Secrets Operator — acceptable for this PoC's non-production security posture (SEC-3), revisit if this ever handles real data.
+- **`terraform/` has not been run against real AWS infrastructure yet.** It was authored and syntax-checked (`terraform fmt`) in an environment where `terraform init` couldn't reach `releases.hashicorp.com` (network policy in that sandbox, not an AWS issue) to download providers/modules, so `terraform validate`/`plan` were never run. The module sources, versions, and attribute names are correct as of `terraform-aws-modules/eks` v20.x / `vpc` v5.x / `iam` v5.x, but the first real `terraform init && terraform plan` (§2) is also this config's first real test — read the plan output carefully before `apply`.

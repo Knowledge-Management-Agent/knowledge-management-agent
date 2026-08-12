@@ -19,5 +19,15 @@ data/chroma/
 frontend/node_modules/
 frontend/dist/
 
+
 # Eval output
 eval/results/
+
+# Terraform (commit .terraform.lock.hcl -- everything else here is either
+# local plugin cache/state or environment-specific, not meant to be shared)
+terraform/**/.terraform/
+terraform/**/*.tfstate
+terraform/**/*.tfstate.*
+terraform/**/*.tfvars
+terraform/**/backend.hcl
+terraform/**/crash.log
