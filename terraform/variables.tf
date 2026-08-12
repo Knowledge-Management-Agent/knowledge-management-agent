@@ -11,9 +11,9 @@ variable "cluster_name" {
 }
 
 variable "kubernetes_version" {
-  description = "EKS Kubernetes version."
+  description = "EKS Kubernetes version. Must be a currently-supported version -- check with `aws eks describe-cluster-versions` before bumping, since AWS periodically retires old versions (1.30 was retired as of this writing, which is what motivated pinning this explicitly rather than leaving it undocumented)."
   type        = string
-  default     = "1.30"
+  default     = "1.34"
 }
 
 variable "vpc_cidr" {

@@ -1,9 +1,14 @@
+# See k8s/11-backend-service.yaml for why this is type: LoadBalancer.
 apiVersion: v1
 kind: Service
 metadata:
   name: km-frontend
   namespace: km-agent
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
 spec:
+  type: LoadBalancer
   selector:
     app: km-frontend
   ports:
