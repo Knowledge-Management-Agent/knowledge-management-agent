@@ -1,0 +1,60 @@
+# Pinned to a single replica: app/rag/store.py uses chromadb's
+# PersistentClient directly against the PVC below, which is a
+# single-writer local store, not a clustered/multi-writer database.
+# Do not raise replicas without first addressing DEPLOY-4 (see report.md /
+# step.md) -- e.g. migrating to a managed or clustered vector DB.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: km-backend
+  namespace: km-agent
+  labels:
+    app: km-backend
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: km-backend
+  template:
+    metadata:
+      labels:
+        app: km-backend
+    spec:
+      containers:
+        - name: backend
+          image: REPLACE_WITH_ECR_URI/km-agent-backend:REPLACE_WITH_TAG
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: km-backend-config
+            - secretRef:
+                name: km-backend-secret
+          volumeMounts:
+            - name: chroma-data
+              mountPath: /data/chroma
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: chroma-data
+          persistentVolumeClaim:
+            claimName: chroma-data
