@@ -25,6 +25,10 @@ def build_llm_client(settings: Settings) -> LLMClient:
         from app.llm.gemini_provider import GeminiLLM
 
         return GeminiLLM(settings)
+    if provider == "groq":
+        from app.llm.groq_provider import GroqLLM
+
+        return GroqLLM(settings)
     raise ValueError(f"Unknown llm_provider: {settings.llm_provider}")
 
 
@@ -44,6 +48,10 @@ def build_embedder(settings: Settings) -> Embedder:
         from app.llm.gemini_provider import GeminiEmbedder
 
         return GeminiEmbedder(settings)
+    if provider == "local":
+        from app.llm.local_provider import LocalEmbedder
+
+        return LocalEmbedder(settings)
     raise ValueError(f"Unknown embedding_provider: {settings.embedding_provider}")
 
 

@@ -6,9 +6,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # --- Provider selection (provider-agnostic LLM layer) ---
-    # One of: mock, openai, azure_openai, claude, gemini
+    # One of: mock, openai, azure_openai, claude, gemini, groq
     llm_provider: str = "mock"
-    # One of: mock, openai, azure_openai, gemini
+    # One of: mock, openai, azure_openai, gemini, local
     embedding_provider: str = "mock"
 
     # --- OpenAI ---
@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_chat_model: str = "gemini-2.0-flash"
     gemini_embedding_model: str = "text-embedding-004"
+
+    # --- Groq (OpenAI-compatible API, chat-completion only, no embeddings) ---
+    groq_api_key: str = ""
+    groq_chat_model: str = "llama-3.3-70b-versatile"
+
+    # --- Local embedding (open-source sentence-transformers model, runs
+    # in-process on CPU -- no API key, no external service) ---
+    local_embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
     # --- Vector store (ChromaDB) ---
     chroma_persist_dir: str = "./data/chroma"

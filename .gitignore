@@ -10,6 +10,7 @@ backend/__pycache__/
 backend/.env
 backend/app/mcp/.env
 k8s/secret.yaml
+.mcp.json
 
 # Vector store data
 backend/data/
