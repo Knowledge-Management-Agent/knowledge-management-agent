@@ -126,6 +126,8 @@ Edit placeholders first:
 - `k8s/20-frontend-deployment.yaml` — replace `REPLACE_WITH_ECR_URI/km-agent-frontend:REPLACE_WITH_TAG` with `${ECR_FRONTEND_URL}:${IMAGE_TAG}`.
 - `k8s/30-ingress.yaml` — leave as-is for now (not applied until §1's "add a domain later" step).
 
+**If you're editing these via an uploaded/zipped snapshot** (e.g. the EC2-bastion pattern in §2b/§4, where the repo is zipped, uploaded to S3, and unpacked on the instance) — **your `sed`/manual edits happen on that snapshot, not the tracked repo.** It's easy to fix the placeholders there, deploy successfully, and then have a *later* redeploy from a fresh checkout silently reuse the untouched, placeholder-filled files, producing `InvalidImageName` pod failures with no obvious cause. Either edit the repo files before zipping, or re-upload/commit the fixed copies afterward — don't let the two silently diverge.
+
 ```bash
 kubectl apply -f k8s/00-namespace.yaml
 kubectl apply -f k8s/01-configmap.yaml
@@ -293,6 +295,17 @@ Same pattern for `km-frontend`. Because the backend Deployment uses `strategy: R
 ---
 
 ## 10. Teardown
+
+**Do the `kubectl delete` step below *before* `terraform destroy`, not after, and don't skip it.**
+If you're using `type: LoadBalancer` Services (§6 addendum) or the Ingress, each one owns a
+real AWS Load Balancer that the AWS Load Balancer Controller only cleans up in reaction to
+the Kubernetes object being deleted *while the controller is still running*. Run
+`terraform destroy` first (or the cluster gets deleted/replaced for any other reason) and
+those NLBs/ALBs are orphaned in your AWS account — silently costing money and pointing at
+nothing, exactly like the ones this repo's own deployment session left behind (had to be
+found and deleted manually via `aws elbv2 delete-load-balancer`). If that already happened
+to you: `aws elbv2 describe-load-balancers` to find them, `aws elbv2 delete-load-balancer
+--load-balancer-arn <arn>` to remove each one.
 
 ```bash
 kubectl delete -f k8s/30-ingress.yaml --ignore-not-found

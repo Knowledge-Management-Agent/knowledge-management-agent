@@ -4,6 +4,11 @@ resource "aws_ecr_repository" "repo" {
   name                 = each.value
   image_tag_mutability = "MUTABLE"
 
+  # Without this, `terraform destroy` fails outright on a repo that still
+  # has images in it (which it will, after any real deployment) -- learned
+  # the hard way via a partial destroy that needed a manual force-unlock.
+  force_delete = true
+
   image_scanning_configuration {
     scan_on_push = true
   }
