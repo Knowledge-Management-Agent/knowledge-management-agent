@@ -1,6 +1,6 @@
 # Non-secret backend config, mirrors backend/.env.example. Override
-# LLM_PROVIDER / EMBEDDING_PROVIDER and CORS_ORIGINS per environment before
-# applying -- see step.md.
+# LLM_PROVIDER / EMBEDDING_PROVIDER per environment before applying -- see
+# step.md.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -26,4 +26,8 @@ data:
   JWT_EXPIRES_MINUTES: "120"
   DEMO_VIEWER_USERNAME: "viewer"
   DEMO_AUTHOR_USERNAME: "author"
-  CORS_ORIGINS: '["https://app.REPLACE_WITH_DOMAIN"]'
+  # Wildcard, not a real domain -- deliberate for this PoC: the frontend's
+  # LoadBalancer hostname is only known after it's created (and changes on
+  # every destroy/recreate cycle, see step.md), so there's no stable origin
+  # to pin here yet. Tighten this once a real domain + Ingress exists.
+  CORS_ORIGINS: '["*"]'
