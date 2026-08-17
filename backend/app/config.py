@@ -34,7 +34,7 @@ class Settings(BaseSettings):
 
     # --- Groq (OpenAI-compatible API, chat-completion only, no embeddings) ---
     groq_api_key: str = ""
-    groq_chat_model: str = "llama-3.3-70b-versatile"
+    groq_chat_model: str = "openai/gpt-oss-120b"
 
     # --- Local embedding (open-source sentence-transformers model, runs
     # in-process on CPU -- no API key, no external service) ---
