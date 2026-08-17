@@ -122,7 +122,20 @@ for i in $(seq 1 60); do
 done
 
 echo "=== 7/8: smoke test ==="
-curl -sf --max-time 10 "${BACKEND_URL}/health" | python3 -m json.tool
+# The Service's LoadBalancer hostname appears well before AWS finishes
+# provisioning DNS + passing target-group health checks -- retry.
+for i in $(seq 1 30); do
+  if BODY=$(curl -sf --max-time 10 "${BACKEND_URL}/health"); then
+    echo "$BODY" | python3 -m json.tool
+    break
+  fi
+  echo "not ready yet (attempt $i/30), retrying in 10s..."
+  sleep 10
+  if [ "$i" -eq 30 ]; then
+    echo "ERROR: backend never became reachable at ${BACKEND_URL}/health" >&2
+    exit 1
+  fi
+done
 
 echo "=== 8/8: re-ingest eval corpus ==="
 LOGIN_JSON="$(printf '{"username":"author","password":"%s"}' "$DEMO_AUTHOR_PASSWORD")"

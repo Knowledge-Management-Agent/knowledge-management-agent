@@ -126,7 +126,21 @@ jobs:
           kubectl rollout status deployment/km-frontend -n "$NAMESPACE" --timeout=300s
 
       - name: Smoke test
-        run: curl -sf --max-time 10 "${{ steps.backend_url.outputs.url }}/health" | python3 -m json.tool
+        # The Service's LoadBalancer hostname appears in kubectl output well
+        # before AWS finishes provisioning DNS + passing target-group health
+        # checks -- retry instead of a single one-shot curl.
+        run: |
+          BACKEND_URL="${{ steps.backend_url.outputs.url }}"
+          for i in $(seq 1 30); do
+            if BODY=$(curl -sf --max-time 10 "${BACKEND_URL}/health"); then
+              echo "$BODY" | python3 -m json.tool
+              exit 0
+            fi
+            echo "not ready yet (attempt $i/30), retrying in 10s..."
+            sleep 10
+          done
+          echo "::error::backend never became reachable at ${BACKEND_URL}/health"
+          exit 1
 
       - name: Re-ingest eval corpus
         if: inputs.reingest_corpus
