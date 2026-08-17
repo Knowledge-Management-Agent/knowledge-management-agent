@@ -52,9 +52,19 @@ export default function App() {
         ))}
       </nav>
 
-      {tab === "qa" && <Chat token={session.token} />}
-      {tab === "generate" && isAuthor && <GenerationForm token={session.token} />}
-      {tab === "ingest" && isAuthor && <IngestPanel token={session.token} />}
+      <div style={{ display: tab === "qa" ? "block" : "none" }}>
+        <Chat token={session.token} />
+      </div>
+      {isAuthor && (
+        <div style={{ display: tab === "generate" ? "block" : "none" }}>
+          <GenerationForm token={session.token} />
+        </div>
+      )}
+      {isAuthor && (
+        <div style={{ display: tab === "ingest" ? "block" : "none" }}>
+          <IngestPanel token={session.token} />
+        </div>
+      )}
     </div>
   );
 }
