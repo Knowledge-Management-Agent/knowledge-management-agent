@@ -1,0 +1,89 @@
+name: Infra (Terraform)
+
+# Manual only, on purpose -- this provisions/destroys real AWS spend
+# (EKS cluster, node group, VPC, ECR). No push/PR triggers.
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "terraform action to run"
+        required: true
+        type: choice
+        options:
+          - apply
+          - destroy
+        default: apply
+
+permissions:
+  id-token: write   # required for OIDC -> AWS role assumption
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  CLUSTER_NAME: km-agent-poc
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    environment: aws-deploy   # requires manual approval if a required reviewer is set on this environment
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.9"
+
+      - name: Write backend.hcl
+        working-directory: terraform
+        run: |
+          cat > backend.hcl <<EOF
+          bucket         = "${{ vars.TF_STATE_BUCKET }}"
+          key            = "km-agent/terraform.tfstate"
+          region         = "${{ env.AWS_REGION }}"
+          dynamodb_table = "${{ vars.TF_LOCK_TABLE }}"
+          encrypt        = true
+          EOF
+
+      - name: terraform init
+        working-directory: terraform
+        run: terraform init -backend-config=backend.hcl -input=false
+
+      - name: terraform plan
+        working-directory: terraform
+        run: |
+          if [ "${{ inputs.action }}" = "destroy" ]; then
+            terraform plan -destroy -input=false -out=tfplan
+          else
+            terraform plan -input=false -out=tfplan
+          fi
+
+      # Only for destroy: release the two LoadBalancer-backed NLBs before the
+      # cluster disappears out from under the AWS Load Balancer Controller --
+      # otherwise they're orphaned in the account, silently costing money.
+      # See step.md §10 for the incident this is guarding against.
+      - name: Delete LoadBalancer Services (pre-destroy only)
+        if: inputs.action == 'destroy'
+        continue-on-error: true   # cluster may already be gone/never existed -- not fatal
+        run: |
+          aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+          kubectl delete svc km-frontend km-backend -n km-agent --ignore-not-found
+
+      - name: terraform apply/destroy
+        working-directory: terraform
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Verify no orphaned load balancers remain (destroy only)
+        if: inputs.action == 'destroy'
+        run: |
+          orphans=$(aws elbv2 describe-load-balancers \
+            --query "LoadBalancers[?contains(LoadBalancerName,'kmagent') || contains(LoadBalancerName,'km-agent')].LoadBalancerName" \
+            --output text)
+          if [ -n "$orphans" ]; then
+            echo "::warning::Possible orphaned load balancer(s) still present: $orphans"
+          fi

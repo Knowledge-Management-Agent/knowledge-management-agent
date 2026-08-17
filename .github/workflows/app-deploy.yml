@@ -1,0 +1,154 @@
+name: App Deploy
+
+# Manual only -- builds+pushes images and (re)deploys the app onto whatever
+# EKS cluster the Infra workflow already provisioned. Does NOT touch
+# Terraform/infra; run the Infra workflow first if the cluster doesn't exist
+# yet.
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to build/deploy (defaults to the commit SHA)"
+        required: false
+        type: string
+      reingest_corpus:
+        description: "Re-ingest eval/corpus/ after deploying"
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  CLUSTER_NAME: km-agent-poc
+  NAMESPACE: km-agent
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: aws-deploy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set image tag
+        id: tag
+        run: |
+          TAG="${{ inputs.image_tag }}"
+          if [ -z "$TAG" ]; then TAG="${GITHUB_SHA::7}"; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Point kubectl at the cluster
+        run: aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+
+      - name: Log in to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build + push backend image
+        env:
+          ECR_BACKEND_URL: ${{ steps.ecr-login.outputs.registry }}/km-agent-backend
+        run: |
+          docker build -t "${ECR_BACKEND_URL}:${{ steps.tag.outputs.tag }}" ./backend
+          docker push "${ECR_BACKEND_URL}:${{ steps.tag.outputs.tag }}"
+          echo "ECR_BACKEND_URL=$ECR_BACKEND_URL" >> "$GITHUB_ENV"
+
+      - name: Apply namespace, config, storage
+        run: |
+          kubectl apply -f k8s/00-namespace.yaml
+          kubectl apply -f k8s/01-configmap.yaml
+          kubectl patch configmap km-backend-config -n "$NAMESPACE" --type merge -p \
+            '{"data":{"LLM_PROVIDER":"groq","EMBEDDING_PROVIDER":"local"}}'
+          kubectl apply -f k8s/03-storageclass.yaml
+          kubectl apply -f k8s/04-pvc.yaml
+
+      - name: Apply secret
+        run: |
+          kubectl create secret generic km-backend-secret -n "$NAMESPACE" \
+            --from-literal=GROQ_API_KEY="${{ secrets.GROQ_API_KEY }}" \
+            --from-literal=OPENAI_API_KEY="" \
+            --from-literal=AZURE_OPENAI_API_KEY="" \
+            --from-literal=AZURE_OPENAI_ENDPOINT="" \
+            --from-literal=AZURE_OPENAI_CHAT_DEPLOYMENT="" \
+            --from-literal=AZURE_OPENAI_EMBEDDING_DEPLOYMENT="" \
+            --from-literal=ANTHROPIC_API_KEY="" \
+            --from-literal=GEMINI_API_KEY="" \
+            --from-literal=JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            --from-literal=DEMO_VIEWER_PASSWORD="${{ secrets.DEMO_VIEWER_PASSWORD }}" \
+            --from-literal=DEMO_AUTHOR_PASSWORD="${{ secrets.DEMO_AUTHOR_PASSWORD }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Apply backend Deployment + Service
+        run: |
+          sed "s|REPLACE_WITH_ECR_URI/km-agent-backend:REPLACE_WITH_TAG|${ECR_BACKEND_URL}:${{ steps.tag.outputs.tag }}|" \
+            k8s/10-backend-deployment.yaml | kubectl apply -f -
+          kubectl apply -f k8s/11-backend-service.yaml
+          kubectl rollout status deployment/km-backend -n "$NAMESPACE" --timeout=300s
+
+      - name: Wait for backend NLB hostname
+        id: backend_url
+        run: |
+          for i in $(seq 1 60); do
+            HOST=$(kubectl get svc km-backend -n "$NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+            [ -n "$HOST" ] && break
+            sleep 5
+          done
+          if [ -z "$HOST" ]; then
+            echo "::error::backend LoadBalancer hostname never appeared"
+            exit 1
+          fi
+          echo "url=http://$HOST" >> "$GITHUB_OUTPUT"
+
+      - name: Build + push frontend image
+        env:
+          ECR_FRONTEND_URL: ${{ steps.ecr-login.outputs.registry }}/km-agent-frontend
+          BACKEND_URL: ${{ steps.backend_url.outputs.url }}
+        run: |
+          docker build -t "${ECR_FRONTEND_URL}:${{ steps.tag.outputs.tag }}" \
+            --build-arg VITE_API_BASE_URL="$BACKEND_URL" \
+            ./frontend
+          docker push "${ECR_FRONTEND_URL}:${{ steps.tag.outputs.tag }}"
+          echo "ECR_FRONTEND_URL=$ECR_FRONTEND_URL" >> "$GITHUB_ENV"
+
+      - name: Apply frontend Deployment + Service
+        run: |
+          sed "s|REPLACE_WITH_ECR_URI/km-agent-frontend:REPLACE_WITH_TAG|${ECR_FRONTEND_URL}:${{ steps.tag.outputs.tag }}|" \
+            k8s/20-frontend-deployment.yaml | kubectl apply -f -
+          kubectl apply -f k8s/21-frontend-service.yaml
+          kubectl rollout status deployment/km-frontend -n "$NAMESPACE" --timeout=300s
+
+      - name: Smoke test
+        run: curl -sf --max-time 10 "${{ steps.backend_url.outputs.url }}/health" | python3 -m json.tool
+
+      - name: Re-ingest eval corpus
+        if: inputs.reingest_corpus
+        env:
+          BACKEND_URL: ${{ steps.backend_url.outputs.url }}
+        run: |
+          TOKEN=$(curl -sf -X POST "${BACKEND_URL}/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d "$(printf '{"username":"author","password":"%s"}' "${{ secrets.DEMO_AUTHOR_PASSWORD }}")" \
+            | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+          for f in eval/corpus/*; do
+            echo "ingesting $(basename "$f")..."
+            curl -sf -X POST "${BACKEND_URL}/ingest" \
+              -H "Authorization: Bearer $TOKEN" -F "file=@${f}" > /dev/null
+          done
+
+      - name: Summary
+        run: |
+          FRONTEND_HOST=$(kubectl get svc km-frontend -n "$NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          {
+            echo "### Deployed"
+            echo "- Backend:  ${{ steps.backend_url.outputs.url }}"
+            echo "- Frontend: http://$FRONTEND_HOST"
+            echo "- Image tag: ${{ steps.tag.outputs.tag }}"
+          } >> "$GITHUB_STEP_SUMMARY"
