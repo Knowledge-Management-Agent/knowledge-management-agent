@@ -1,0 +1,77 @@
+# Optional: runs the MCP server (backend/app/mcp/server.py) in-cluster over
+# SSE instead of as a local stdio subprocess on the caller's machine (see
+# MCP-5 note in report.md / step.md). Deploy this only if a shared,
+# always-on MCP endpoint is actually needed -- local stdio remains the
+# default and doesn't require any of this.
+#
+# Reuses the backend image (same app package, same deps) with a different
+# entrypoint, so no separate Dockerfile/build is needed.
+#
+# Deliberately internal-only: it authenticates to the backend as a single
+# shared KM_MCP_USERNAME identity with no auth of its own in front of the
+# SSE endpoint, so anyone who can reach it gets that identity's RBAC. Do
+# not put a LoadBalancer/Ingress in front of this Service -- reach it via
+# `kubectl -n km-agent port-forward svc/km-mcp 8001:8001` or from inside
+# the cluster/VPC only.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: km-mcp
+  namespace: km-agent
+  labels:
+    app: km-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: km-mcp
+  template:
+    metadata:
+      labels:
+        app: km-mcp
+    spec:
+      containers:
+        - name: mcp
+          image: REPLACE_WITH_ECR_URI/km-agent-backend:REPLACE_WITH_TAG
+          command: ["python", "-m", "app.mcp.server"]
+          ports:
+            - containerPort: 8001
+          env:
+            - name: MCP_TRANSPORT
+              value: "sse"
+            - name: MCP_HOST
+              value: "0.0.0.0"
+            - name: MCP_PORT
+              value: "8001"
+            # In-cluster DNS name for the backend Service (port 80, see
+            # k8s/11-backend-service.yaml) -- not the external ELB
+            # hostname used by out-of-cluster clients.
+            - name: KM_API_BASE_URL
+              value: "http://km-backend"
+            - name: KM_MCP_USERNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: km-backend-config
+                  key: DEMO_AUTHOR_USERNAME
+            - name: KM_MCP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: km-backend-secret
+                  key: DEMO_AUTHOR_PASSWORD
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            tcpSocket:
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8001
+            initialDelaySeconds: 15
+            periodSeconds: 20

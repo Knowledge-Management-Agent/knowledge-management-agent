@@ -93,6 +93,16 @@ jobs:
           kubectl apply -f k8s/11-backend-service.yaml
           kubectl rollout status deployment/km-backend -n "$NAMESPACE" --timeout=300s
 
+      - name: Apply MCP Deployment + Service
+        # Reuses the backend image (same package, different entrypoint --
+        # see k8s/12-mcp-deployment.yaml). ClusterIP-only/ internal, so no
+        # LoadBalancer wait or smoke test here, see step.md §8b.
+        run: |
+          sed "s|REPLACE_WITH_ECR_URI/km-agent-backend:REPLACE_WITH_TAG|${ECR_BACKEND_URL}:${{ steps.tag.outputs.tag }}|" \
+            k8s/12-mcp-deployment.yaml | kubectl apply -f -
+          kubectl apply -f k8s/13-mcp-service.yaml
+          kubectl rollout status deployment/km-mcp -n "$NAMESPACE" --timeout=300s
+
       - name: Wait for backend NLB hostname
         id: backend_url
         run: |
@@ -164,5 +174,6 @@ jobs:
             echo "### Deployed"
             echo "- Backend:  ${{ steps.backend_url.outputs.url }}"
             echo "- Frontend: http://$FRONTEND_HOST"
+            echo "- MCP server: internal only (ClusterIP) -- \`kubectl -n $NAMESPACE port-forward svc/km-mcp 8001:8001\`, then connect an SSE client to http://localhost:8001/sse (see step.md §8b)"
             echo "- Image tag: ${{ steps.tag.outputs.tag }}"
           } >> "$GITHUB_STEP_SUMMARY"

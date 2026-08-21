@@ -1,16 +1,26 @@
 """MCP server for the Knowledge Management Agent (MCP-1).
 
-Runs locally over stdio (e.g. launched by Claude Desktop/Claude Code) and
-exposes the KM Agent's core capabilities as MCP tools by calling the
+Exposes the KM Agent's core capabilities as MCP tools by calling the
 deployed REST API (KM_API_BASE_URL) -- it is a transport/interface layer,
 not a parallel implementation of the RAG/ingestion pipeline (MCP-3), and it
 inherits the API's viewer/author RBAC by authenticating as a real user
 (MCP-2) rather than re-implementing access control.
 
-Run with: python -m app.mcp.server
+Two transports (MCP-5):
+- stdio (default) -- launched locally by Claude Desktop/Code as a
+  subprocess. Run with: python -m app.mcp.server
+- sse -- runs as a long-lived HTTP server so it can be deployed in-cluster
+  (see k8s/12-mcp-deployment.yaml) instead of on the caller's machine.
+  Select with MCP_TRANSPORT=sse; MCP_HOST/MCP_PORT control the bind
+  address (default 0.0.0.0:8001). The client then connects to
+  http://<host>:<port>/sse instead of spawning this file directly.
+
 Config (MCP-4): KM_API_BASE_URL, KM_MCP_USERNAME, KM_MCP_PASSWORD
-(or KM_MCP_TOKEN for a pre-issued bearer token), KM_MCP_TIMEOUT_SECONDS.
+(or KM_MCP_TOKEN for a pre-issued bearer token), KM_MCP_TIMEOUT_SECONDS,
+MCP_TRANSPORT, MCP_HOST, MCP_PORT.
 """
+import os
+
 from mcp.server.fastmcp import FastMCP
 
 from app.mcp.client import KMApiClient, KMApiError
@@ -75,7 +85,11 @@ def list_documents() -> dict:
 
 
 def main() -> None:
-    mcp.run()
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    if transport == "sse":
+        mcp.settings.host = os.environ.get("MCP_HOST", "0.0.0.0")
+        mcp.settings.port = int(os.environ.get("MCP_PORT", "8001"))
+    mcp.run(transport=transport)
 
 
 if __name__ == "__main__":

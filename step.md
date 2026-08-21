@@ -12,7 +12,7 @@ This closes the two gaps identified in `report.md` §7–8 (MCP-1..6, DEPLOY-1..
 |---|---|---|
 | `km-backend` (FastAPI + ChromaDB) | EKS, 1 replica (single-writer vector store — see §5) | `backend/Dockerfile` |
 | `km-frontend` (React, nginx) | EKS, 2 replicas | `frontend/Dockerfile` |
-| MCP server | **Your machine**, stdio, launched by Claude Desktop/Code | `backend/app/mcp/server.py` (no image — runs from your local Python env) |
+| MCP server | **Your machine**, stdio, launched by Claude Desktop/Code (default) — or optionally EKS, SSE, ClusterIP-only, see §8b | `backend/app/mcp/server.py` (stdio: no image, runs from your local Python env; SSE: reuses `backend/Dockerfile`'s image, `k8s/12-mcp-deployment.yaml`) |
 
 The MCP server is a thin REST client (`backend/app/mcp/client.py`) — it logs into the deployed backend the same way the web UI does and is bound by the same viewer/author RBAC. It has no direct access to Chroma, the LLM provider, or any secret other than its own login credentials.
 
@@ -277,6 +277,43 @@ Add to `claude_desktop_config.json`:
 ```
 
 Tools exposed: `query_knowledge_base`, `generate_document`, `ingest_document` (reads a local file path on *your* machine and uploads it), `list_documents`. All four run as whatever role `KM_MCP_USERNAME` has — use `viewer` credentials instead of `author` if you want a read-only MCP identity.
+
+### 8b. Alternative: run the MCP server in-cluster (SSE, internal-only)
+
+Local stdio (above) is the default and doesn't need anything below. Deploy this instead only if a shared, always-on MCP endpoint is actually needed — e.g. multiple people connecting without each running their own local process.
+
+`backend/app/mcp/server.py` also supports an `sse` transport (`MCP_TRANSPORT=sse`), so it can run as a long-lived HTTP server rather than a subprocess spawned by the client. `k8s/12-mcp-deployment.yaml` + `k8s/13-mcp-service.yaml` deploy it that way, reusing the backend image with a different entrypoint (no separate build needed).
+
+This is deliberately **not** exposed on the internet-facing ALB like `app.`/`api.` are: the pod authenticates to the backend as one shared `KM_MCP_USERNAME` identity (`author`, via `DEMO_AUTHOR_USERNAME`/`DEMO_AUTHOR_PASSWORD` — same values already in `km-backend-config`/`km-backend-secret`, no new secret needed) with no auth layer of its own in front of the SSE endpoint. Anyone who can reach it gets that identity's RBAC, so keep it ClusterIP-only and reach it via port-forward or from inside the VPC — never add an Ingress/LoadBalancer for it without adding real auth in front first.
+
+```bash
+# fill in the same REPLACE_WITH_ECR_URI/REPLACE_WITH_TAG used for km-backend
+kubectl apply -f k8s/12-mcp-deployment.yaml -f k8s/13-mcp-service.yaml
+kubectl -n km-agent rollout status deployment/km-mcp
+
+kubectl -n km-agent port-forward svc/km-mcp 8001:8001
+```
+
+Then point an SSE-capable MCP client at `http://localhost:8001/sse` instead of a `command`/`args` stdio entry, e.g. for Claude Code:
+
+```bash
+claude mcp add --transport sse km-agent http://localhost:8001/sse
+```
+
+or in `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "km-agent": {
+      "type": "sse",
+      "url": "http://localhost:8001/sse"
+    }
+  }
+}
+```
+
+To tear it down: `kubectl delete -f k8s/12-mcp-deployment.yaml -f k8s/13-mcp-service.yaml`.
 
 ---
 
