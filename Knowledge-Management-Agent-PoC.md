@@ -75,17 +75,25 @@ The Knowledge Management Agent uses LLMs and Retrieval-Augmented Generation (RAG
 
 ## 6. Technology Stack
 
-| Layer | Technology | Purpose |
+**Note (verified against the actual codebase, not the original proposal):** the table
+below replaces the original options-menu style ("OpenAI, Azure OpenAI, Claude, or
+Gemini") with what's actually implemented and what's actually running today. Several
+originally-proposed options (FAISS/Pinecone/Weaviate, SharePoint/Confluence, S3/Blob/GCS
+object storage) were never built — confirmed by grepping the codebase for any trace of
+them and finding none.
+
+| Layer | Technology (as implemented) | Purpose |
 |---|---|---|
-| Frontend | React (web UI) | Chat interface for querying and reviewing generated documents |
-| Backend / API | Python, FastAPI | RAG orchestration and REST endpoints |
-| LLM | OpenAI, Azure OpenAI, Claude, or Gemini | Document generation and grounded question answering |
-| Embedding Model | OpenAI, Azure OpenAI, or open-source | Converts text to vector representations |
-| Vector Database | ChromaDB, FAISS, Pinecone, or Weaviate | Stores and indexes embeddings for semantic search |
-| Document Repository | SharePoint, Confluence | Source of existing organizational documentation |
-| Object Storage | S3, Azure Blob Storage, or GCS | Stores ingested and generated artifacts |
-| Authentication | JWT / Basic RBAC | Access control for the PoC environment |
-| Deployment | Docker, Kubernetes, or cloud PaaS | Hosts the containerized application |
+| Frontend | React (Vite), served via nginx in production | Q&A chat, document-generation forms, and file-ingestion UI, tab-gated by role |
+| Backend / API | Python, FastAPI | RAG orchestration and REST endpoints (`/auth`, `/query`, `/generate`, `/ingest`, `/health`) |
+| MCP Server | Python, official `mcp` SDK (stdio transport) | Exposes the same capabilities as callable tools for AI agents (Claude Code/Desktop) — a thin REST client over the same API, not a separate implementation |
+| LLM | **Currently deployed: Groq** (`openai/gpt-oss-120b`). Also implemented and selectable via `LLM_PROVIDER`: OpenAI, Azure OpenAI, Anthropic Claude, Google Gemini, or an offline `mock` | Document generation and grounded question answering |
+| Embedding Model | **Currently deployed: local, open-source** `sentence-transformers/all-MiniLM-L6-v2` (in-process, CPU, no API key/external call). Also implemented and selectable via `EMBEDDING_PROVIDER`: OpenAI, Azure OpenAI, Gemini, or `mock` | Converts text to vector representations |
+| Vector Database | **ChromaDB only** (self-hosted, embedded `PersistentClient`) — FAISS/Pinecone/Weaviate were never implemented | Stores and indexes embeddings for semantic search |
+| Document Repository | **Local file upload only** (PDF, DOCX, HTML, Markdown, plain text) — no SharePoint/Confluence integration exists | Source of documents to ingest |
+| Object Storage | **None in the application itself.** ChromaDB's on-disk data persists via a Kubernetes PersistentVolumeClaim (AWS EBS); container images live in Amazon ECR | Persistence for the vector store and deployed artifacts |
+| Authentication | JWT (PyJWT) + 2-role RBAC (`viewer` / `author`) — explicitly non-production-grade | Access control for the PoC environment |
+| Deployment | Docker; **AWS EKS** (Kubernetes) provisioned via Terraform; GitHub Actions CI/CD authenticating to AWS via OIDC | Hosts and deploys the containerized application |
 
 ---
 
